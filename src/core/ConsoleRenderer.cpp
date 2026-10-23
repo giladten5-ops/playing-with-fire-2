@@ -23,20 +23,7 @@ void ConsoleRenderer::render(const World& world) {
         int ey = entity->getY();
 
         if (ex >= 0 && ex < width && ey >= 0 && ey < height && entity->isAlive()) {
-            switch (entity->getType()) {
-                case EntityType::PLAYER:
-                    display[ex][ey] = 'P';
-                    break;
-                case EntityType::BOMB:
-                    display[ex][ey] = '@';
-                    break;
-                case EntityType::FLAME:
-                    display[ex][ey] = '*';
-                    break;
-                case EntityType::BREAKABLE_WALL:
-                    display[ex][ey] = 'B';
-                    break;
-            }
+            display[ex][ey] = entity->getDisplayChar();
         }
     }
 

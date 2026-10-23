@@ -8,6 +8,8 @@ EntityType Flame::getType() const {
     return EntityType::FLAME;
 }
 
+char Flame::getDisplayChar() const { return '*'; }
+
 void Flame::update(World& world) {
     if (!m_isAlive) return;
     

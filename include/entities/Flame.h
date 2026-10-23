@@ -9,6 +9,7 @@ class Flame : public Entity {
         Flame(int x, int y, int timer);
 
         EntityType getType() const override;
+        char getDisplayChar() const override;
         void update(World& world) override;
 
         void onExplosionHit(World& world) override;

@@ -14,6 +14,7 @@ class Bomb : public Entity {
         int getOwnerId() const;
 
         EntityType getType() const override;
+        char getDisplayChar() const override;
         void update(World& world) override;
 
         bool isSolid() const override;

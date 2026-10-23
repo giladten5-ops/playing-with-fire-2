@@ -6,6 +6,8 @@ EntityType BreakableWall::getType() const {
     return EntityType::BREAKABLE_WALL;
 }
 
+char BreakableWall::getDisplayChar() const { return 'B'; }
+
 void BreakableWall::update(World& world) {
     // BreakableWall does not change over time
 }

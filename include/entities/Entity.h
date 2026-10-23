@@ -4,7 +4,8 @@ enum class EntityType {
     PLAYER,
     BOMB,
     FLAME,
-    BREAKABLE_WALL 
+    BREAKABLE_WALL, 
+    POWER_UP
 };
 
 class World; 
@@ -20,6 +21,8 @@ class Entity {
 
         virtual int getX() const;
         virtual int getY() const;
+
+        virtual char getDisplayChar() const = 0;        
         virtual void setX(int x);
         virtual void setY(int y);
         virtual bool isAlive() const;

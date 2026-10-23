@@ -6,6 +6,7 @@ class BreakableWall : public Entity {
         BreakableWall(int x, int y);
 
         EntityType getType() const override;
+        char getDisplayChar() const override;
         void update(World& world) override;
 
         bool isSolid() const override;

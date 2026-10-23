@@ -11,7 +11,11 @@ class Player : public Entity {
         Player(int startX, int startY, int id);
 
         EntityType getType() const override;
+        char getDisplayChar() const override;
         void update(World& world) override;
 
         void handleCommand(Command command, World& world) override;
+
+        void increaseBombRadius();
+        void increaseMaxBombs();
 };

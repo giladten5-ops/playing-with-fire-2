@@ -11,6 +11,10 @@ EntityType Bomb::getType() const {
     return EntityType::BOMB;
 }
 
+char Bomb::getDisplayChar() const {
+    return '@'; // Representing the bomb with '@'
+}
+
 void Bomb::update(World& world) {
     if (!m_isAlive) return;
     if (m_timer > 0) {
