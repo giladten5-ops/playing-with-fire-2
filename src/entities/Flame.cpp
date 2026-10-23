@@ -1,0 +1,32 @@
+#include "../../include/entities/Flame.h"
+#include "../../include/core/World.h"
+
+Flame::Flame(int x, int y, int timer) 
+    : Entity(x, y), m_timer(timer) {}
+
+EntityType Flame::getType() const {
+    return EntityType::FLAME;
+}
+
+void Flame::update(World& world) {
+    if (!m_isAlive) return;
+    
+    if (m_timer > 0) {
+        m_timer--;
+        if (m_timer == 0) {
+            destroy();
+        }
+    }
+}
+
+void Flame::onExplosionHit(World& world) {
+    // Flames pass through other flames without being destroyed
+}
+
+void Flame::onIntersect(Entity& other, World& world) {
+    if (!m_isAlive || !other.isAlive()) return;
+    
+    if (other.getType() != EntityType::FLAME) {
+        other.onExplosionHit(world);
+    }
+}
