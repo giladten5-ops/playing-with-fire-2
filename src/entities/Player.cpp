@@ -9,6 +9,8 @@ EntityType Player::getType() const {
     return EntityType::PLAYER;
 }
 
+char Player::getDisplayChar() const { return 'P'; }
+
 void Player::update(World& world) {
 }
 
@@ -59,4 +61,12 @@ void Player::handleCommand(Command command, World& world) {
             m_y = targetY;
         }
     }
+}
+
+void Player::increaseBombRadius() {
+    m_bombRadius++;
+}
+
+void Player::increaseMaxBombs() {
+    m_maxBombs++;
 }
