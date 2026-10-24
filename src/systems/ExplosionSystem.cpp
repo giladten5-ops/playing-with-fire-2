@@ -62,7 +62,7 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY) {
         }
     }
 
-    world.addEntity(std::make_unique<Flame>(targetX, targetY, 10));
+    world.addEntity(std::make_unique<Flame>(targetX, targetY, 30));
 
     return !explosionStopped;
 }

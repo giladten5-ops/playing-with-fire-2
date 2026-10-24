@@ -3,7 +3,7 @@
 #include "../../include/entities/Bomb.h"
 
 Player::Player(int startX, int startY, int id) 
-    : Entity(startX, startY), m_id(id), m_bombRadius(2), m_maxBombs(1) {}
+    : Entity(startX, startY), m_id(id), m_bombRadius(2), m_maxBombs(1), m_speedLevel(0), m_cooldown(0) {}
     
 EntityType Player::getType() const {
     return EntityType::PLAYER;
@@ -12,6 +12,9 @@ EntityType Player::getType() const {
 char Player::getDisplayChar() const { return 'P'; }
 
 void Player::update(World& world) {
+    if (m_cooldown > 0) {
+        m_cooldown--;
+    }
 }
 
 void Player::handleCommand(Command command, World& world) {    
@@ -20,6 +23,11 @@ void Player::handleCommand(Command command, World& world) {
     int targetX = m_x;
     int targetY = m_y;
 
+    if (command == Command::UP || command == Command::DOWN || 
+        command == Command::LEFT || command == Command::RIGHT) {
+
+        if (m_cooldown > 0) return; 
+        }
     switch (command) {
         case Command::UP:
             targetY--;
@@ -45,7 +53,7 @@ void Player::handleCommand(Command command, World& world) {
                 }
                 
                 if (!bombExists) {
-                    const int DEFAULT_BOMB_TIMER = 30;
+                    const int DEFAULT_BOMB_TIMER = 90;
                     world.addEntity(std::make_unique<Bomb>(m_x, m_y, DEFAULT_BOMB_TIMER, m_bombRadius, m_id));
                 }
             }
@@ -59,6 +67,7 @@ void Player::handleCommand(Command command, World& world) {
         if (world.isTileFree(targetX, targetY)) {
             m_x = targetX;
             m_y = targetY;
+            m_cooldown = 4 - (m_speedLevel * 2); // Adjust cooldown based on speed level
         }
     }
 }
@@ -69,4 +78,10 @@ void Player::increaseBombRadius() {
 
 void Player::increaseMaxBombs() {
     m_maxBombs++;
+}
+
+void Player::increaseSpeed() {
+    if (m_speedLevel < 2) { // Assuming 2 is the maximum speed level
+        m_speedLevel++;
+    }
 }

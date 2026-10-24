@@ -6,6 +6,8 @@ class Player : public Entity {
         int m_id;
         int m_bombRadius;
         int m_maxBombs;
+        int m_speedLevel;
+        int m_cooldown; // Number of ticks until the next move is allowed
 
     public:
         Player(int startX, int startY, int id);
@@ -18,4 +20,6 @@ class Player : public Entity {
 
         void increaseBombRadius();
         void increaseMaxBombs();
+
+        void increaseSpeed();
 };

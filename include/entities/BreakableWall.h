@@ -11,4 +11,5 @@ class BreakableWall : public Entity {
 
         bool isSolid() const override;
         bool stopsExplosion() const override;
+        void onExplosionHit(World& world) override;
 };

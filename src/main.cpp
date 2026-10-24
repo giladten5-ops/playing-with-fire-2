@@ -29,7 +29,7 @@ int main () {
     }
 
     bool isRunning = true;
-    const int TARGET_FPS = 10;
+    const int TARGET_FPS = 30;
     const int FRAME_DURATION = 1000 / TARGET_FPS; 
 
     while (isRunning) {

@@ -1,4 +1,5 @@
 #include "../../include/entities/BreakableWall.h"
+#include "../../include/factories/PowerUpFactory.h"
 
 BreakableWall::BreakableWall(int x, int y) : Entity(x, y) {}
 
@@ -18,4 +19,11 @@ bool BreakableWall::isSolid() const {
 
 bool BreakableWall::stopsExplosion() const {
     return true;
+}
+
+void BreakableWall::onExplosionHit(World& world) {
+    if (m_isAlive) {
+        destroy();
+        PowerUpFactory::trySpawn(world, m_x, m_y);
+    }
 }
