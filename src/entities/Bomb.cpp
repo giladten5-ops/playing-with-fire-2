@@ -16,6 +16,20 @@ char Bomb::getDisplayChar() const {
 }
 
 void Bomb::update(World& world) {
+    if (m_dx != 0 || m_dy != 0) {
+        if (m_slideCooldown > 0) {
+            m_slideCooldown--;
+        } else {
+            if (world.isTileFree(m_x + m_dx, m_y + m_dy)) {
+                m_x += m_dx;
+                m_y += m_dy;
+                m_slideCooldown = 2;
+            } else {
+                m_dx = 0; m_dy = 0;
+            }
+        }
+    }
+
     if (!m_isAlive) return;
     if (m_timer > 0) {
         m_timer--;
@@ -41,4 +55,8 @@ void Bomb::onExplosionHit(World& world) {
         // just set timer to 0. The ExplosionSystem will pick it up immediately.
         m_timer = 0; 
     }
+}
+void Bomb::push(int dx, int dy) {
+    m_dx = dx;
+    m_dy = dy;
 }

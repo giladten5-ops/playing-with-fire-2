@@ -1,6 +1,8 @@
+#include "../../include/interfaces/IPushable.h"
 #include "../../include/entities/Player.h"
 #include "../../include/core/World.h"
 #include "../../include/entities/Bomb.h"
+#include "../../include/interfaces/IPushable.h"
 
 Player::Player(int startX, int startY, int id) 
     : Entity(startX, startY), m_id(id), m_bombRadius(2), m_maxBombs(1), m_speedLevel(0), m_cooldown(0) {}
@@ -20,29 +22,41 @@ void Player::update(World& world) {
 void Player::handleCommand(Command command, World& world) {    
     if (!m_isAlive) return;
     
+    bool isMoveCommand = (command == Command::UP || command == Command::DOWN || 
+                          command == Command::LEFT || command == Command::RIGHT);
+    if (isMoveCommand && m_cooldown > 0) {
+        return;
+    }
+
     int targetX = m_x;
     int targetY = m_y;
 
-    if (command == Command::UP || command == Command::DOWN || 
-        command == Command::LEFT || command == Command::RIGHT) {
-
-        if (m_cooldown > 0) return; 
-        }
     switch (command) {
         case Command::UP:
-            targetY--;
-            break;
+            targetY--; m_facingDx = 0; m_facingDy = -1; break;
         case Command::DOWN:
-            targetY++;
-            break;
+            targetY++; m_facingDx = 0; m_facingDy = 1; break;
         case Command::LEFT:
-            targetX--;
-            break;
+            targetX--; m_facingDx = -1; m_facingDy = 0; break;
         case Command::RIGHT:
-            targetX++;
-            break;
+            targetX++; m_facingDx = 1; m_facingDy = 0; break;
+            
         case Command::PLACE_BOMB: {
-            if (world.countBombsForOwner(m_id) < m_maxBombs) {
+            bool pushedBomb = false;
+
+            if (m_hasHammer) {
+                int checkX = m_x + m_facingDx;
+                int checkY = m_y + m_facingDy;
+                auto entitiesInFront = world.getEntitiesAt(checkX, checkY);
+                for (auto* e : entitiesInFront) {
+                    if (auto* pushable = dynamic_cast<IPushable*>(e)) {
+                        pushable->push(m_facingDx, m_facingDy);
+                        pushedBomb = true;
+                    }
+                }
+            }
+
+            if (!pushedBomb && world.countBombsForOwner(m_id) < m_maxBombs) {
                 bool bombExists = false;
                 auto entitiesHere = world.getEntitiesAt(m_x, m_y);
                 for (auto* e : entitiesHere) {
@@ -67,7 +81,7 @@ void Player::handleCommand(Command command, World& world) {
         if (world.isTileFree(targetX, targetY)) {
             m_x = targetX;
             m_y = targetY;
-            m_cooldown = 4 - (m_speedLevel * 2); // Adjust cooldown based on speed level
+            m_cooldown = 4 - (m_speedLevel * 2);
         }
     }
 }
@@ -84,4 +98,7 @@ void Player::increaseSpeed() {
     if (m_speedLevel < 2) { // Assuming 2 is the maximum speed level
         m_speedLevel++;
     }
+}
+void Player::enableHammer() {
+    m_hasHammer = true;
 }
