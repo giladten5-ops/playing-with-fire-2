@@ -12,27 +12,65 @@
 #include "../include/core/ConsoleRenderer.h"
 #include "../include/core/ConsoleInput.h"
 
+struct GameConfig {
+    int numPlayers = 1;
+    int numBots = 1;
+};
+
+GameConfig showMenu() {
+    GameConfig config;
+    std::cout << "\033[2J\033[1;1H"; 
+    std::cout << "=================================\n";
+    std::cout << "        BOMBERMAN CLONE          \n";
+    std::cout << "=================================\n\n";
+    
+    std::cout << "Enter number of human players (0 - 2): ";
+    std::cin >> config.numPlayers;
+    if (config.numPlayers < 0) config.numPlayers = 0;
+    if (config.numPlayers > 2) config.numPlayers = 2;
+
+    std::cout << "Enter number of bots (0 - 4): ";
+    std::cin >> config.numBots;
+    if (config.numBots < 0) config.numBots = 0;
+    if (config.numBots > 4) config.numBots = 4;
+
+    return config;
+}
+
 int main () {
     srand(static_cast<unsigned int>(time(nullptr)));
 
+    GameConfig config = showMenu();
+
     Game game(13, 13);
     ConsoleRenderer renderer;
-    ConsoleInput consoleInput;
+    ConsoleInput consoleInput; 
 
     ClassicLevel level(4, 13, 13);
     game.loadLevel(level);
 
     auto spawnPoints = level.getSpawnPoints();
-    if (spawnPoints.size() >= 1) {
-        game.getWorld().addEntity(std::make_unique<Player>(spawnPoints[0].x, spawnPoints[0].y, 1));
+    int currentSpawnIdx = 0;
+    int nextId = 1;
+
+    for (int i = 0; i < config.numPlayers; i++) {
+        if (currentSpawnIdx < spawnPoints.size()) {
+            game.getWorld().addEntity(std::make_unique<Player>(
+                spawnPoints[currentSpawnIdx].x, spawnPoints[currentSpawnIdx].y, nextId));
+            currentSpawnIdx++;
+            nextId++;
+        }
     }
-    if (spawnPoints.size() >= 2) {
-        game.getWorld().addEntity(std::make_unique<Player>(spawnPoints[1].x, spawnPoints[1].y, 2));
+
+    for (int i = 0; i < config.numBots; i++) {
+        if (currentSpawnIdx < spawnPoints.size()) {
+            game.getWorld().addEntity(std::make_unique<DumbBot>(
+                spawnPoints[currentSpawnIdx].x, spawnPoints[currentSpawnIdx].y, nextId));
+            currentSpawnIdx++;
+            nextId++;
+        }
     }
-    // כאן הבוט מתווסף בפועל למשחק
-    if (spawnPoints.size() >= 3) {
-        game.getWorld().addEntity(std::make_unique<DumbBot>(spawnPoints[2].x, spawnPoints[2].y, 3));
-    }
+    
     game.getWorld().sync();
 
     bool isRunning = true;
@@ -52,7 +90,7 @@ int main () {
                 break;
             }
 
-            if (p1) {
+            if (p1 && dynamic_cast<DumbBot*>(p1) == nullptr) {
                 if (input == '\033') { 
                     if (consoleInput.getRawChar() == '[') {
                         char arrow = consoleInput.getRawChar();
@@ -66,7 +104,7 @@ int main () {
                 }
             }
 
-            if (p2) {
+            if (p2 && dynamic_cast<DumbBot*>(p2) == nullptr) {
                 if (input == 'w' || input == 'W') p2->handleCommand(Command::UP, game.getWorld());
                 if (input == 's' || input == 'S') p2->handleCommand(Command::DOWN, game.getWorld());
                 if (input == 'a' || input == 'A') p2->handleCommand(Command::LEFT, game.getWorld());
@@ -78,6 +116,10 @@ int main () {
         game.update(Command::NONE);
         renderer.render(game.getWorld());
 
+        if (game.isGameOver()) {
+            break;
+        }
+
         auto frameEnd = std::chrono::high_resolution_clock::now();
         auto frameDuration = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart).count();
 
@@ -86,5 +128,23 @@ int main () {
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
         }
     }
+
+    int winnerId = game.getWinnerId();
+    std::cout << "\n============================================\n";
+    if (winnerId == -1) {
+        std::cout << "               IT'S A DRAW!                 \n";
+    } else {
+        Player* winner = game.getWorld().getPlayer(winnerId);
+        bool isBot = false;
+        if (winner) isBot = dynamic_cast<DumbBot*>(winner) != nullptr;
+        
+        if (isBot) {
+            std::cout << "               BOT " << winnerId << " WINS!                 \n";
+        } else {
+            std::cout << "             PLAYER " << winnerId << " WINS!                \n";
+        }
+    }
+    std::cout << "============================================\n";
+    
     return 0;
 }

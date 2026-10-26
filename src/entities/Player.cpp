@@ -10,6 +10,11 @@ Player::Player(int startX, int startY, int id)
 
 int Player::getId() const { return m_id; }
 int Player::getLives() const { return m_lives; }
+int Player::getMaxBombs() const { return m_maxBombs; }
+int Player::getBombRadius() const { return m_bombRadius; }
+int Player::getSpeedLevel() const { return m_speedLevel; }
+bool Player::hasHammer() const { return m_hasHammer; }
+bool Player::hasRing() const { return m_hasRing; }
 
 EntityType Player::getType() const {
     return EntityType::PLAYER;

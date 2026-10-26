@@ -1,15 +1,11 @@
 #include "../../include/core/Game.h"
+#include "../../include/entities/Player.h"
 
 Game::Game(int boardWidth, int boardHeight) 
     : m_world(boardWidth, boardHeight) {}
 
-World& Game::getWorld() {
-    return m_world;
-}
-
-const World& Game::getWorld() const {
-    return m_world;
-}
+World& Game::getWorld() { return m_world; }
+const World& Game::getWorld() const { return m_world; }
 
 void Game::loadLevel(ILevel& level) {
     level.generate(m_world);
@@ -33,8 +29,25 @@ void Game::update(Command command) {
     m_world.sync();
 
     m_explosionSystem.process(m_world);
-    
     m_collisionSystem.process(m_world);
-    
     m_world.sync();
+}
+
+bool Game::isGameOver() const {
+    int alivePlayers = 0;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::PLAYER) {
+            alivePlayers++;
+        }
+    }
+    return alivePlayers <= 1;
+}
+
+int Game::getWinnerId() const {
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::PLAYER) {
+            return static_cast<Player*>(entity.get())->getId();
+        }
+    }
+    return -1;
 }
