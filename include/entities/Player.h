@@ -23,12 +23,18 @@ public:
 
     int getId() const;
     int getLives() const;
+    int getMaxBombs() const;
+    int getBombRadius() const;
+    int getSpeedLevel() const;
+    bool hasHammer() const;
+    bool hasRing() const;
+
     EntityType getType() const override;
     char getDisplayChar() const override;
     
     void update(World& world) override;
     void handleCommand(Command command, World& world) override;
-    void onExplosionHit(World& world) override; // דריסת מתודת הפגיעה
+    void onExplosionHit(World& world) override;
 
     void increaseBombRadius();
     void increaseMaxBombs();
