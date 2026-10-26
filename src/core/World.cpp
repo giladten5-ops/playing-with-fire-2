@@ -1,4 +1,6 @@
 #include "../../include/core/World.h"
+#include "../../include/entities/Player.h"
+#include "../../include/entities/Bomb.h"
 #include <algorithm>
 
 World::World(int width, int height) : m_board(width, height) {}
@@ -68,13 +70,30 @@ int World::countBombsForOwner(int ownerId) const {
     int count = 0;
     for (const auto& entity : m_entities) {
         if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
-            count++;
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) {
+                count++;
+            }
         }
     }
     for (const auto& entity : m_spawnQueue) {
         if (entity->getType() == EntityType::BOMB) {
-            count++;
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) {
+                count++;
+            }
         }
     }
     return count;
+}
+
+Player* World::getPlayer(int id) {
+    for (auto& e : m_entities) {
+        if (e->isAlive() && e->getType() == EntityType::PLAYER) {
+            if (auto* p = dynamic_cast<Player*>(e.get())) {
+                if (p->getId() == id) {
+                    return p;
+                }
+            }
+        }
+    }
+    return nullptr;
 }

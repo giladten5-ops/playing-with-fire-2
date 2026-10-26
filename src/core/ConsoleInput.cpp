@@ -28,17 +28,23 @@ void ConsoleInput::setNonBlocking(bool enable) {
     }
 }
 
-Command ConsoleInput::getCommand() {
-    char c;
+char ConsoleInput::getRawChar() {
+    char c = '\0';
     if (read(STDIN_FILENO, &c, 1) == 1) {
-        switch (c) {
-            case 'w': case 'W': return Command::UP;
-            case 's': case 'S': return Command::DOWN;
-            case 'a': case 'A': return Command::LEFT;
-            case 'd': case 'D': return Command::RIGHT;
-            case ' ': return Command::PLACE_BOMB;
-            case 'q': case 'Q': return Command::QUIT;
-        }
+        return c;
     }
-    return Command::NONE;
+    return '\0';
+}
+
+Command ConsoleInput::getCommand() {
+    char c = getRawChar();
+    switch (c) {
+        case 'w': case 'W': return Command::UP;
+        case 's': case 'S': return Command::DOWN;
+        case 'a': case 'A': return Command::LEFT;
+        case 'd': case 'D': return Command::RIGHT;
+        case ' ': return Command::PLACE_BOMB;
+        case 'q': case 'Q': return Command::QUIT;
+        default: return Command::NONE;
+    }
 }
