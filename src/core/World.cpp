@@ -12,9 +12,18 @@ const std::vector<std::unique_ptr<Entity>>& World::getEntities() const {
     return m_entities;
 }
 
+const std::vector<std::unique_ptr<Entity>>& World::getSpawnQueue() const {
+    return m_spawnQueue;
+}
+
 std::vector<Entity*> World::getEntitiesAt(int x, int y) const {
     std::vector<Entity*> result;
     for (const auto& entity : m_entities) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y) {
+            result.push_back(entity.get());
+        }
+    }
+    for (const auto& entity : m_spawnQueue) {
         if (entity->isAlive() && entity->getX() == x && entity->getY() == y) {
             result.push_back(entity.get());
         }
@@ -57,10 +66,13 @@ bool World::isTileFree(int x, int y) const {
     }
 
     for (const auto& entity : m_entities) {
-        if (entity->isAlive() && entity->getX() == x && entity->getY() == y) {
-            if (entity->isSolid()) {
-                return false;
-            }
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y && entity->isSolid()) {
+            return false;
+        }
+    }
+    for (const auto& entity : m_spawnQueue) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y && entity->isSolid()) {
+            return false;
         }
     }
     return true;
@@ -70,16 +82,12 @@ int World::countBombsForOwner(int ownerId) const {
     int count = 0;
     for (const auto& entity : m_entities) {
         if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
-            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) {
-                count++;
-            }
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) count++;
         }
     }
     for (const auto& entity : m_spawnQueue) {
-        if (entity->getType() == EntityType::BOMB) {
-            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) {
-                count++;
-            }
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) count++;
         }
     }
     return count;
@@ -88,11 +96,18 @@ int World::countBombsForOwner(int ownerId) const {
 Player* World::getPlayer(int id) {
     for (auto& e : m_entities) {
         if (e->isAlive() && e->getType() == EntityType::PLAYER) {
-            if (auto* p = dynamic_cast<Player*>(e.get())) {
-                if (p->getId() == id) {
-                    return p;
-                }
-            }
+            auto* p = static_cast<Player*>(e.get());
+            if (p->getId() == id) return p;
+        }
+    }
+    return nullptr;
+}
+
+const Player* World::getPlayer(int id) const {
+    for (const auto& e : m_entities) {
+        if (e->isAlive() && e->getType() == EntityType::PLAYER) {
+            const auto* p = static_cast<const Player*>(e.get());
+            if (p->getId() == id) return p;
         }
     }
     return nullptr;

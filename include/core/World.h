@@ -19,6 +19,7 @@ public:
     const Board& getBoard() const;
 
     const std::vector<std::unique_ptr<Entity>>& getEntities() const;
+    const std::vector<std::unique_ptr<Entity>>& getSpawnQueue() const;
     std::vector<Entity*> getEntitiesAt(int x, int y) const;
 
     void addEntity(std::unique_ptr<Entity> entity);
@@ -28,4 +29,5 @@ public:
     bool isTileFree(int x, int y) const;
     int countBombsForOwner(int ownerId) const;
     Player* getPlayer(int id);
+    const Player* getPlayer(int id) const;
 };

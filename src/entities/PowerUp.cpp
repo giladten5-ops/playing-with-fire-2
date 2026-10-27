@@ -8,7 +8,7 @@ EntityType PowerUp::getType() const {
     return EntityType::POWER_UP;
 }
 
-void PowerUp::update(World& world) {
+void PowerUp::update(World& /*world*/) {
 }
 
 bool PowerUp::isSolid() const {
@@ -19,12 +19,12 @@ bool PowerUp::stopsExplosion() const {
     return false;
 }
 
-void PowerUp::onExplosionHit(World& world) {
+void PowerUp::onExplosionHit(World& /*world*/) {
     return;
 }
 
-void PowerUp::onIntersect(Entity& other, World& world) {
-    if (!m_isAlive || !other.isAlive()) return;
+void PowerUp::onIntersect(Entity& other, World& /*world*/) {
+    if (!isAlive() || !other.isAlive()) return;
 
     if (other.getType() == EntityType::PLAYER) {
         apply(static_cast<Player&>(other));

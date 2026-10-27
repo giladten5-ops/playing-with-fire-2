@@ -12,7 +12,7 @@ EntityType Bomb::getType() const {
 }
 
 char Bomb::getDisplayChar() const {
-    return '@'; // Representing the bomb with '@'
+    return '@';
 }
 
 void Bomb::update(World& world) {
@@ -20,42 +20,43 @@ void Bomb::update(World& world) {
         if (m_slideCooldown > 0) {
             m_slideCooldown--;
         } else {
-            if (world.isTileFree(m_x + m_dx, m_y + m_dy)) {
-                m_x += m_dx;
-                m_y += m_dy;
-                m_slideCooldown = 2;
+            int nextX = getX() + m_dx;
+            int nextY = getY() + m_dy;
+            if (world.isTileFree(nextX, nextY)) {
+                setX(nextX);
+                setY(nextY);
+                m_slideCooldown = 2; // SLIDE_COOLDOWN_FRAMES
             } else {
-                m_dx = 0; m_dy = 0;
+                m_dx = 0;
+                m_dy = 0;
             }
         }
     }
 
-    if (!m_isAlive) return;
+    if (!isAlive()) return;
     if (m_timer > 0) {
         m_timer--;
     }
 }
 
 bool Bomb::isSolid() const {
-    return true; // You can't walk on a bomb
+    return true; 
 }
 
 bool Bomb::stopsExplosion() const {
-    return true; // Explosions stop when hitting another bomb
+    return true; 
 }
 
 bool Bomb::shouldExplode() const {
-    // The ExplosionSystem will check this every frame
-    return m_isAlive && m_timer <= 0;
+    return isAlive() && m_timer <= 0;
 }
 
-void Bomb::onExplosionHit(World& world) {
-    if (m_isAlive) {
-        // Chain reaction: Instead of exploding recursively, 
-        // just set timer to 0. The ExplosionSystem will pick it up immediately.
+void Bomb::onExplosionHit(World& /*world*/) {
+    if (isAlive()) {
         m_timer = 0; 
     }
 }
+
 void Bomb::push(int dx, int dy) {
     m_dx = dx;
     m_dy = dy;

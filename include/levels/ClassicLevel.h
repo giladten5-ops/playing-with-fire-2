@@ -4,21 +4,15 @@
 
 class World;
 
-struct Position {
-    int x;
-    int y;
-};
-
 class ClassicLevel : public ILevel {
-    private:
-        int m_numPlayers;
-        std::vector<Position> m_spawnPoints;
+private:
+    int m_numPlayers;
+    std::vector<Position> m_spawnPoints;
 
-        bool isSafeZone(int x, int y) const;
+    bool isSafeZone(int x, int y) const;
 
-    public:
-        ClassicLevel(int numPlayers, int boardWidth, int boardHeight);
-        void generate(World& world) override;
-        
-        std::vector<Position> getSpawnPoints() const;
+public:
+    ClassicLevel(int numPlayers, int boardWidth, int boardHeight);
+    void generate(World& world) override;
+    std::vector<Position> getSpawnPoints() const override;
 };

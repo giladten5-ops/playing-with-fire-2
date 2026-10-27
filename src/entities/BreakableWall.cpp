@@ -9,8 +9,7 @@ EntityType BreakableWall::getType() const {
 
 char BreakableWall::getDisplayChar() const { return 'B'; }
 
-void BreakableWall::update(World& world) {
-    // BreakableWall does not change over time
+void BreakableWall::update(World& /*world*/) {
 }
 
 bool BreakableWall::isSolid() const {
@@ -22,8 +21,8 @@ bool BreakableWall::stopsExplosion() const {
 }
 
 void BreakableWall::onExplosionHit(World& world) {
-    if (m_isAlive) {
+    if (isAlive()) {
         destroy();
-        PowerUpFactory::trySpawn(world, m_x, m_y);
+        PowerUpFactory::trySpawn(world, getX(), getY());
     }
 }
