@@ -1,8 +1,18 @@
 #pragma once
 #include "Entity.h"
+#include <string>
 
 class Player : public Entity {
-protected:
+public:
+    static constexpr int INITIAL_LIVES = 3;
+    static constexpr int INITIAL_BOMB_RADIUS = 2;
+    static constexpr int INITIAL_MAX_BOMBS = 1;
+    static constexpr int DEFAULT_BOMB_TIMER = 90;
+    static constexpr int INVINCIBILITY_FRAMES = 60;
+    static constexpr int BASE_MOVE_COOLDOWN = 4;
+    static constexpr int MAX_SPEED_LEVEL = 2;
+
+private:
     int m_id;
     int m_bombRadius;
     int m_maxBombs;
@@ -12,11 +22,16 @@ protected:
     bool m_hasRing = false;
     int m_facingDx = 0;
     int m_facingDy = 1;
-    
-    int m_startX;
-    int m_startY;
     int m_lives;
     int m_invincibilityTimer;
+
+    void tryMove(int targetX, int targetY, World& world);
+    void tryPlaceOrPushBomb(World& world);
+
+protected:
+    bool isOnCooldown() const;
+    void addCooldown(int frames);
+    bool canPlaceBomb(const World& world) const;
 
 public:
     Player(int startX, int startY, int id);
@@ -28,6 +43,9 @@ public:
     int getSpeedLevel() const;
     bool hasHammer() const;
     bool hasRing() const;
+
+    virtual bool isBot() const;
+    virtual std::string getDisplayName() const;
 
     EntityType getType() const override;
     char getDisplayChar() const override;
