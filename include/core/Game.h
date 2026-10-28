@@ -7,6 +7,11 @@
 #include "../interfaces/IInput.h"
 #include <vector>
 
+struct StepResult {
+    bool isDone;
+    int reward;
+};
+
 class Game {
 private:
     World m_world;
@@ -20,6 +25,10 @@ public:
     const World& getWorld() const;
 
     void loadLevel(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
+    void reset(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
+    StepResult step(int playerId, Command action);
+    std::vector<float> getState(int playerId) const;
+
     void update(Command command = Command::NONE);
     void update(const std::vector<PlayerCommand>& commands);
 
