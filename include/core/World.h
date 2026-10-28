@@ -24,10 +24,12 @@ public:
 
     void addEntity(std::unique_ptr<Entity> entity);
     void sync();
+    void clear();
 
     bool isPositionValid(int x, int y) const;
     bool isTileFree(int x, int y) const;
     int countBombsForOwner(int ownerId) const;
     Player* getPlayer(int id);
     const Player* getPlayer(int id) const;
+
 };

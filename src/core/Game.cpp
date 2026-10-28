@@ -91,3 +91,89 @@ int Game::getWinnerId() const {
     }
     return -1;
 }
+
+void Game::reset(ILevel& level, int numHumanPlayers, int numBots) {
+    m_world.clear();
+    int width = m_world.getBoard().getWidth();
+    int height = m_world.getBoard().getHeight();
+    m_suddenDeathSystem = SuddenDeathSystem(120 * 30, width, height); // Reset sudden death system
+    loadLevel(level, numHumanPlayers, numBots);
+}
+
+std::vector<float> Game::getState(int playerId) const {
+    const Board& board = m_world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+    int channels = 7; // 7 channels: walls, destructible, bombs, explosions, powerUps, the player, other players
+
+    std::vector<float> state(channels * width * height, 0.0f); // Initialize all to 0.0f
+
+    auto setPixel = [&](int c, int x, int y, float value) {
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+            state[c * width * height + y * width + x] = value;
+        }
+    };
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (board.getCellType(x, y) == CellType::SOLID_WALL) {
+                setPixel(0, x, y, 1.0f);
+            }
+        }
+    }
+
+    for (const auto& entity : m_world.getEntities()) {
+        if (!entity->isAlive()) continue;
+
+        int ex = entity->getX();
+        int ey = entity->getY();
+        EntityType type = entity->getType();
+
+        if (type == EntityType::BREAKABLE_WALL) {
+            setPixel(1, ex, ey, 1.0f);
+        } else if (type == EntityType::BOMB) {
+            setPixel(2, ex, ey, 1.0f);
+        } else if (type == EntityType::FLAME) {
+            setPixel(3, ex, ey, 1.0f);
+        } else if (type == EntityType::POWER_UP) {
+            setPixel(4, ex, ey, 1.0f);
+        } else if (type == EntityType::PLAYER) {
+            const Player* player = static_cast<const Player*>(entity.get());
+            if (player->getId() == playerId) {
+                setPixel(5, ex, ey, 1.0f); // The player itself
+            } else {
+                setPixel(6, ex, ey, 1.0f); // Other players
+            }
+        }
+    }
+
+    return state;
+}
+
+
+StepResult Game::step(int playerId, Command action) {
+    StepResult result;
+    result.isDone = false;
+    result.reward = -0.1f; // Default reward for each step, to encourage faster completion
+
+    const Player* player = m_world.getPlayer(playerId);
+    bool wasAlive = player && player->isAlive(); // Check if the player was alive before the update
+
+    std::vector<PlayerCommand> commands;
+    if (action != Command::NONE) {
+        commands.push_back({playerId, action});
+    }
+    update(commands); // bombs tick, explosions, collisions, and sudden death are processed here
+
+    player = m_world.getPlayer(playerId);
+    bool isAliveNow = player && player->isAlive(); // Check if the player is alive
+    result.isDone = isGameOver();
+
+    if (wasAlive && !isAliveNow) {
+        result.reward = -100.0f; // Player died, large negative reward
+        result.isDone = true; // Game is over if the player died
+    } else if (result.isDone && isAliveNow) {
+        result.reward = 100.0f; // Player won, large positive reward
+    }
+    return result;
+}

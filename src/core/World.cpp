@@ -112,3 +112,18 @@ const Player* World::getPlayer(int id) const {
     }
     return nullptr;
 }
+
+void World::clear() {
+    m_entities.clear();
+    m_spawnQueue.clear();
+
+    int width = m_board.getWidth();
+    int height = m_board.getHeight();
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            m_board.setCellType(x, y, CellType::EMPTY);
+        }
+    }
+}
+
