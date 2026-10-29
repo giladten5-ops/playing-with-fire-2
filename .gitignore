@@ -1,0 +1,17 @@
+# 1. C++ Build artifacts and binaries
+*.o
+bomberman
+bomberman_engine*.so
+
+# 2. Python Environment and Cache
+venv/
+__pycache__/
+*.pyc
+
+# 3. Machine Learning Models and Checkpoints
+*.zip
+ppo_bomberman_v1/
+
+# 4. OS specific files
+.DS_Store
+Thumbs.db
