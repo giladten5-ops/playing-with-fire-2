@@ -31,5 +31,6 @@ public:
     int countBombsForOwner(int ownerId) const;
     Player* getPlayer(int id);
     const Player* getPlayer(int id) const;
+    int countBreakableWalls() const;
 
 };

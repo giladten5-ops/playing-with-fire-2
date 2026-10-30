@@ -154,26 +154,36 @@ std::vector<float> Game::getState(int playerId) const {
 StepResult Game::step(int playerId, Command action) {
     StepResult result;
     result.isDone = false;
-    result.reward = -0.1f; // Default reward for each step, to encourage faster completion
+    result.reward = -0.1f; // Step penalty to discourage stalling
 
     const Player* player = m_world.getPlayer(playerId);
-    bool wasAlive = player && player->isAlive(); // Check if the player was alive before the update
+    bool wasAlive = player && player->isAlive();
+
+    // Count breakable walls before executing actions and explosions
+    int wallsBefore = m_world.countBreakableWalls();
 
     std::vector<PlayerCommand> commands;
     if (action != Command::NONE) {
         commands.push_back({playerId, action});
     }
-    update(commands); // bombs tick, explosions, collisions, and sudden death are processed here
+    update(commands); // Process player move, bomb ticks, explosions, sudden death
+
+    // Count breakable walls after update
+    int wallsAfter = m_world.countBreakableWalls();
+    int wallsDestroyed = wallsBefore - wallsAfter;
+    if (wallsDestroyed > 0) {
+        result.reward += wallsDestroyed * 2.0f; // Reward for destroying walls
+    }
 
     player = m_world.getPlayer(playerId);
-    bool isAliveNow = player && player->isAlive(); // Check if the player is alive
+    bool isAliveNow = player && player->isAlive();
     result.isDone = isGameOver();
 
     if (wasAlive && !isAliveNow) {
-        result.reward = -100.0f; // Player died, large negative reward
-        result.isDone = true; // Game is over if the player died
+        result.reward = -100.0f; // Player died
+        result.isDone = true;
     } else if (result.isDone && isAliveNow) {
-        result.reward = 100.0f; // Player won, large positive reward
+        result.reward = 100.0f; // Player won
     }
     return result;
 }

@@ -127,3 +127,12 @@ void World::clear() {
     }
 }
 
+int World::countBreakableWalls() const {
+    int count = 0;
+    for (const auto& entity : m_entities) {
+        if (entity->isAlive() && entity->getType() == EntityType::BREAKABLE_WALL) {
+            count++;
+        }
+    }
+    return count;
+}

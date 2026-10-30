@@ -9,7 +9,7 @@
 
 struct StepResult {
     bool isDone;
-    int reward;
+    float reward;
 };
 
 class Game {
