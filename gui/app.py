@@ -3,6 +3,9 @@ import pygame
 import bomberman_engine as bme
 from gui.config import *
 from gui.state_snapshot import SnapshotBuilder
+from gui.assets import AssetManager
+from gui.board_renderer import BoardRenderer
+
 
 class BombermanGUIApp:
     def __init__(self):
@@ -15,6 +18,12 @@ class BombermanGUIApp:
         # Initialize C++ engine and snapshot builder
         self.game = bme.Game(BOARD_WIDTH_TILES, BOARD_HEIGHT_TILES)
         self.snapshot_builder = SnapshotBuilder(BOARD_WIDTH_TILES, BOARD_HEIGHT_TILES)
+
+        self.game = bme.Game(BOARD_WIDTH_TILES, BOARD_HEIGHT_TILES)
+        self.snapshot_builder = SnapshotBuilder(BOARD_WIDTH_TILES, BOARD_HEIGHT_TILES)
+        
+        self.assets = AssetManager()
+        self.board_renderer = BoardRenderer(self.assets)
         
         # Timing variables for the Accumulator pattern
         self.accumulator = 0.0
@@ -22,7 +31,10 @@ class BombermanGUIApp:
         self.paused = False
         
         # Temporary setup to have something in the world
-        self.game.addPlayer(0, 0, 1, isBot=False)
+        # Generate a classic level (4 players total, 13x13 board, 65% breakable wall density)
+        level = bme.ClassicLevel(4, BOARD_WIDTH_TILES, BOARD_HEIGHT_TILES, 65)
+        # Reset the game with 1 human and 3 bots
+        self.game.reset(level, 1, 3)
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -38,16 +50,13 @@ class BombermanGUIApp:
         return True
 
     def render(self, snapshot):
+        # Fill the entire window (HUD area will stay dark grey for now)
         self.screen.fill(COLOR_BG)
         
-        # Draw basic grid lines for the board area (temporary visualization)
-        for x in range(BOARD_WIDTH_TILES + 1):
-            pygame.draw.line(self.screen, COLOR_GRID, (x * TILE_SIZE, 0), (x * TILE_SIZE, WINDOW_HEIGHT))
-        for y in range(BOARD_HEIGHT_TILES + 1):
-            pygame.draw.line(self.screen, COLOR_GRID, (0, y * TILE_SIZE), (BOARD_WIDTH_TILES * TILE_SIZE, y * TILE_SIZE))
+        # Render the board (shifted to the right)
+        self.board_renderer.render(self.screen, snapshot)
         
         pygame.display.flip()
-
     def run(self):
         running = True
         while running:
