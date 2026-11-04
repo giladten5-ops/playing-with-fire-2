@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include "Board.h"
 #include "../entities/Entity.h"
 
@@ -11,6 +12,8 @@ private:
     Board m_board;
     std::vector<std::unique_ptr<Entity>> m_entities;
     std::vector<std::unique_ptr<Entity>> m_spawnQueue;
+    std::unordered_map<int, int> m_wallsDestroyedByOwner;
+    std::unordered_map<int, int> m_enemiesKilledByOwner;
 
 public:
     World(int width, int height);
@@ -33,4 +36,9 @@ public:
     const Player* getPlayer(int id) const;
     int countBreakableWalls() const;
 
+    void recordWallDestroyed(int ownerId);
+    int popWallsDestroyed(int ownerId);
+
+    void recordEnemyKilled(int ownerId);
+    int popEnemiesKilled(int ownerId);
 };

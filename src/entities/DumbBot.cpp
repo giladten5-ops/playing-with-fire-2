@@ -6,7 +6,7 @@
 #include <queue>
 #include <cmath>
 
-DumbBot::DumbBot(int startX, int startY, int id) 
+DumbBot::DumbBot(int startX, int startY, int id)
     : Player(startX, startY, id) {}
 
 bool DumbBot::isBot() const { return true; }
@@ -15,6 +15,18 @@ std::string DumbBot::getDisplayName() const { return "BOT" + std::to_string(getI
 char DumbBot::getDisplayChar() const {
     if (Player::getDisplayChar() == ' ') return ' ';
     return 'D';
+}
+
+bool DumbBot::canStepOn(int x, int y, const World& world) const {
+    if (world.isTileFree(x, y)) return true;
+    if (!hasRing() || !world.isPositionValid(x, y)) return false;
+    if (world.getBoard().getCellType(x, y) == CellType::SOLID_WALL) return false;
+    for (const auto* e : world.getEntitiesAt(x, y)) {
+        if (e->isAlive() && e->isSolid() && e->getType() != EntityType::BOMB) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool DumbBot::hasClearBlastPath(int bx, int by, int tx, int ty, const World& world) const {
@@ -105,7 +117,7 @@ Command DumbBot::findEscapeDirection(const World& world, int extraBx, int extraB
         const auto& d = dirs[(i + offset) % 4];
         int nx = startX + d.dx;
         int ny = startY + d.dy;
-        if (world.isTileFree(nx, ny)) {
+        if (canStepOn(nx, ny, world)) {
             if (!isTileDangerousWithExtraBomb(nx, ny, world, extraBx, extraBy, extraRadius)) {
                 return d.cmd;
             }
@@ -114,7 +126,7 @@ Command DumbBot::findEscapeDirection(const World& world, int extraBx, int extraB
         }
     }
 
-    const int MAX_ESCAPE_STEPS = 5;
+    const int MAX_ESCAPE_STEPS = 6;
     while (!q.empty()) {
         StepNode curr = q.front();
         q.pop();
@@ -125,7 +137,7 @@ Command DumbBot::findEscapeDirection(const World& world, int extraBx, int extraB
             const auto& d = dirs[(i + offset) % 4];
             int nx = curr.x + d.dx;
             int ny = curr.y + d.dy;
-            if (world.isPositionValid(nx, ny) && !visited[nx][ny] && world.isTileFree(nx, ny)) {
+            if (world.isPositionValid(nx, ny) && !visited[nx][ny] && canStepOn(nx, ny, world)) {
                 visited[nx][ny] = true;
                 if (!isTileDangerousWithExtraBomb(nx, ny, world, extraBx, extraBy, extraRadius)) {
                     return curr.firstCommand;
@@ -167,12 +179,12 @@ void DumbBot::update(World& world) {
                 handleCommand(Command::PLACE_BOMB, world);
                 m_currentDir = escapeDir;
                 handleCommand(m_currentDir, world);
-                addCooldown(BOT_REACTION_COOLDOWN);
+                if (!isOnCooldown()) addCooldown(BOT_REACTION_COOLDOWN);
                 return;
             }
         }
 
-        if (rand() % 100 < 40) {
+        if (rand() % 100 < 10) {
             addCooldown(BOT_REACTION_COOLDOWN);
             return;
         }
@@ -185,26 +197,25 @@ void DumbBot::update(World& world) {
             handleCommand(m_currentDir, world);
         } else {
             std::vector<Command> freeMoves;
-            if (world.isTileFree(cx, cy - 1)) freeMoves.push_back(Command::UP);
-            if (world.isTileFree(cx, cy + 1)) freeMoves.push_back(Command::DOWN);
-            if (world.isTileFree(cx - 1, cy)) freeMoves.push_back(Command::LEFT);
-            if (world.isTileFree(cx + 1, cy)) freeMoves.push_back(Command::RIGHT);
+            if (canStepOn(cx, cy - 1, world)) freeMoves.push_back(Command::UP);
+            if (canStepOn(cx, cy + 1, world)) freeMoves.push_back(Command::DOWN);
+            if (canStepOn(cx - 1, cy, world)) freeMoves.push_back(Command::LEFT);
+            if (canStepOn(cx + 1, cy, world)) freeMoves.push_back(Command::RIGHT);
 
             if (!freeMoves.empty()) {
                 m_currentDir = freeMoves[rand() % freeMoves.size()];
                 handleCommand(m_currentDir, world);
             }
         }
-        addCooldown(BOT_REACTION_COOLDOWN);
+        if (!isOnCooldown()) addCooldown(BOT_REACTION_COOLDOWN);
         return;
     }
 
-    // הבוט נמצא במשבצת בטוחה: הוא יזוז אך ורק למשבצות בטוחות אחרות!
     std::vector<Command> safeMoves;
-    if (world.isTileFree(cx, cy - 1) && !isTileDangerous(cx, cy - 1, world)) safeMoves.push_back(Command::UP);
-    if (world.isTileFree(cx, cy + 1) && !isTileDangerous(cx, cy + 1, world)) safeMoves.push_back(Command::DOWN);
-    if (world.isTileFree(cx - 1, cy) && !isTileDangerous(cx - 1, cy, world)) safeMoves.push_back(Command::LEFT);
-    if (world.isTileFree(cx + 1, cy) && !isTileDangerous(cx + 1, cy, world)) safeMoves.push_back(Command::RIGHT);
+    if (canStepOn(cx, cy - 1, world) && !isTileDangerous(cx, cy - 1, world)) safeMoves.push_back(Command::UP);
+    if (canStepOn(cx, cy + 1, world) && !isTileDangerous(cx, cy + 1, world)) safeMoves.push_back(Command::DOWN);
+    if (canStepOn(cx - 1, cy, world) && !isTileDangerous(cx - 1, cy, world)) safeMoves.push_back(Command::LEFT);
+    if (canStepOn(cx + 1, cy, world) && !isTileDangerous(cx + 1, cy, world)) safeMoves.push_back(Command::RIGHT);
 
     int nx = cx, ny = cy;
     if (m_currentDir == Command::UP) ny--;
@@ -213,7 +224,7 @@ void DumbBot::update(World& world) {
     if (m_currentDir == Command::RIGHT) nx++;
 
     bool canContinueSafely = (m_currentDir != Command::NONE &&
-                              world.isTileFree(nx, ny) &&
+                              canStepOn(nx, ny, world) &&
                               !isTileDangerous(nx, ny, world));
 
     if (canContinueSafely && (rand() % 100 < 80)) {
@@ -222,9 +233,8 @@ void DumbBot::update(World& world) {
         m_currentDir = safeMoves[rand() % safeMoves.size()];
         handleCommand(m_currentDir, world);
     } else {
-        // אם כל המשבצות מסביב מסוכנות כרגע (מחכה שפצצה תתפוצץ) - נשאר במקום!
         m_currentDir = Command::NONE;
     }
 
-    addCooldown(BOT_REACTION_COOLDOWN);
+    if (!isOnCooldown()) addCooldown(BOT_REACTION_COOLDOWN);
 }

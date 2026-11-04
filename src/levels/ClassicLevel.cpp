@@ -2,14 +2,14 @@
 #include "../../include/core/World.h"
 #include "../../include/entities/BreakableWall.h"
 #include <cstdlib>
+#include <algorithm>
 
-ClassicLevel::ClassicLevel(int numPlayers, int boardWidth, int boardHeight) {
-    m_numPlayers = numPlayers;
-    
-    if (numPlayers >=1) m_spawnPoints.push_back({0, 0}); 
-    if (numPlayers >=2) m_spawnPoints.push_back({boardWidth - 1, boardHeight - 1}); 
-    if (numPlayers >=3) m_spawnPoints.push_back({0, boardHeight - 1}); 
-    if (numPlayers >=4) m_spawnPoints.push_back({boardWidth - 1, 0}); 
+ClassicLevel::ClassicLevel(int numPlayers, int boardWidth, int boardHeight, int wallDensityPercent)
+    : m_numPlayers(numPlayers), m_wallDensityPercent(std::clamp(wallDensityPercent, 10, 85)) {
+    if (numPlayers >= 1) m_spawnPoints.push_back({0, 0});
+    if (numPlayers >= 2) m_spawnPoints.push_back({boardWidth - 1, boardHeight - 1});
+    if (numPlayers >= 3) m_spawnPoints.push_back({0, boardHeight - 1});
+    if (numPlayers >= 4) m_spawnPoints.push_back({boardWidth - 1, 0});
 }
 
 std::vector<Position> ClassicLevel::getSpawnPoints() const {
@@ -18,8 +18,8 @@ std::vector<Position> ClassicLevel::getSpawnPoints() const {
 
 bool ClassicLevel::isSafeZone(int x, int y) const {
     for (const auto& spawnPoint : m_spawnPoints) {
-        int manhattanDistance = abs(spawnPoint.x - x) + abs(spawnPoint.y - y);
-        if (manhattanDistance <= 1) { 
+        int manhattanDistance = std::abs(spawnPoint.x - x) + std::abs(spawnPoint.y - y);
+        if (manhattanDistance <= 1) {
             return true;
         }
     }
@@ -38,14 +38,14 @@ void ClassicLevel::generate(World& world) {
             }
         }
     }
-    
+
     for (int x = 0; x < width; x++) {
         for (int y = 0; y < height; y++) {
             if (board.getCellType(x, y) == CellType::SOLID_WALL) {
                 continue;
             }
-            if (rand() % 100 < 65) { 
-                if (!isSafeZone(x, y)) { 
+            if (std::rand() % 100 < m_wallDensityPercent) {
+                if (!isSafeZone(x, y)) {
                     world.addEntity(std::make_unique<BreakableWall>(x, y));
                 }
             }
