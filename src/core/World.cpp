@@ -116,6 +116,8 @@ const Player* World::getPlayer(int id) const {
 void World::clear() {
     m_entities.clear();
     m_spawnQueue.clear();
+    m_wallsDestroyedByOwner.clear();
+    m_enemiesKilledByOwner.clear();
 
     int width = m_board.getWidth();
     int height = m_board.getHeight();
@@ -134,5 +136,37 @@ int World::countBreakableWalls() const {
             count++;
         }
     }
+    return count;
+}
+
+void World::recordWallDestroyed(int ownerId) {
+    if (ownerId > 0) {
+        m_wallsDestroyedByOwner[ownerId]++;
+    }
+}
+
+int World::popWallsDestroyed(int ownerId) {
+    auto it = m_wallsDestroyedByOwner.find(ownerId);
+    if (it == m_wallsDestroyedByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
+    return count;
+}
+
+void World::recordEnemyKilled(int ownerId) {
+    if (ownerId > 0) {
+        m_enemiesKilledByOwner[ownerId]++;
+    }
+}
+
+int World::popEnemiesKilled(int ownerId) {
+    auto it = m_enemiesKilledByOwner.find(ownerId);
+    if (it == m_enemiesKilledByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
     return count;
 }

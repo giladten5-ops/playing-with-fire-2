@@ -29,7 +29,6 @@ private:
     void tryPlaceOrPushBomb(World& world);
 
 protected:
-    bool isOnCooldown() const;
     void addCooldown(int frames);
     bool canPlaceBomb(const World& world) const;
 
@@ -41,15 +40,20 @@ public:
     int getMaxBombs() const;
     int getBombRadius() const;
     int getSpeedLevel() const;
+    int getCooldown() const;
+    int getInvincibilityTimer() const;
+    int getFacingDx() const;
+    int getFacingDy() const;
     bool hasHammer() const;
     bool hasRing() const;
+    bool isOnCooldown() const;
 
     virtual bool isBot() const;
     virtual std::string getDisplayName() const;
 
     EntityType getType() const override;
     char getDisplayChar() const override;
-    
+
     void update(World& world) override;
     void handleCommand(Command command, World& world) override;
     void onExplosionHit(World& world) override;

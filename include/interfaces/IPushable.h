@@ -3,5 +3,5 @@
 class IPushable {
 public:
     virtual ~IPushable() = default;
-    virtual void push(int dx, int dy) = 0;
+    virtual void push(int dx, int dy, int pusherId = -1) = 0;
 };
