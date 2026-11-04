@@ -6,6 +6,7 @@ from gui.state_snapshot import SnapshotBuilder
 from gui.assets import AssetManager
 from gui.board_renderer import BoardRenderer
 from gui.controllers import KeyboardController
+from gui.hud_renderer import HUDRenderer
 
 
 class BombermanGUIApp:
@@ -26,9 +27,8 @@ class BombermanGUIApp:
         self.assets = AssetManager()
         self.board_renderer = BoardRenderer(self.assets)
 
-        self.assets = AssetManager()
-        self.board_renderer = BoardRenderer(self.assets)
         
+        self.hud_renderer = HUDRenderer(self.assets)
         # Initialize input controller
         self.controller = KeyboardController()
         
@@ -57,13 +57,17 @@ class BombermanGUIApp:
         return True
 
     def render(self, snapshot):
-        # Fill the entire window (HUD area will stay dark grey for now)
         self.screen.fill(COLOR_BG)
         
         # Render the board (shifted to the right)
         self.board_renderer.render(self.screen, snapshot)
         
+        # Render the HUD on the left
+        self.hud_renderer.render(self.screen, snapshot)
+        
         pygame.display.flip()
+        pygame.display.flip()
+        
     def run(self):
         running = True
         while running:
