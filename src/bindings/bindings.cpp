@@ -67,6 +67,17 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("slideDx", &BombInfo::slideDx)
         .def_readonly("slideDy", &BombInfo::slideDy);
 
+    py::class_<PowerUpInfo>(m, "PowerUpInfo")
+        .def_readonly("x", &PowerUpInfo::x)
+        .def_readonly("y", &PowerUpInfo::y)
+        .def_readonly("type", &PowerUpInfo::type);
+
+    py::class_<FlameInfo>(m, "FlameInfo")
+        .def_readonly("x", &FlameInfo::x)
+        .def_readonly("y", &FlameInfo::y)
+        .def_readonly("timer", &FlameInfo::timer)
+        .def_readonly("ownerId", &FlameInfo::ownerId);
+
     py::class_<ILevel>(m, "ILevel");
     py::class_<ClassicLevel, ILevel>(m, "ClassicLevel")
         .def(py::init<int, int, int, int>(),
@@ -83,6 +94,8 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("getState", &Game::getState)
         .def("getPlayerInfo", &Game::getPlayerInfo)
         .def("getBombs", &Game::getBombs)
+        .def("getPowerUps", &Game::getPowerUps)
+        .def("getFlames", &Game::getFlames)
         .def("clearBoard", &Game::clearBoard)
         .def("setSolidWall", &Game::setSolidWall)
         .def("addPlayer", &Game::addPlayer, py::arg("x"), py::arg("y"), py::arg("id"), py::arg("isBot") = false)

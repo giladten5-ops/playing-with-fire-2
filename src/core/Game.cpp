@@ -8,6 +8,7 @@
 #include "../../include/entities/SpeedPowerUp.h"
 #include "../../include/entities/HammerPowerUp.h"
 #include "../../include/entities/RingPowerUp.h"
+#include "../../include/entities/Flame.h"
 #include <memory>
 #include <algorithm>
 #include <cstdlib>
@@ -404,4 +405,34 @@ StepResult Game::step(int playerId, Command action) {
     }
 
     return result;
+}
+
+std::vector<PowerUpInfo> Game::getPowerUps() const {
+    std::vector<PowerUpInfo> powerUps;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::POWER_UP) {
+            PowerUpInfo pui;
+            pui.x = entity->getX();
+            pui.y = entity->getY();
+            pui.type = entity->getDisplayChar(); 
+            powerUps.push_back(pui);
+        }
+    }
+    return powerUps;
+}
+
+std::vector<FlameInfo> Game::getFlames() const {
+    std::vector<FlameInfo> flames;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::FLAME) {
+            const auto* flame = static_cast<const Flame*>(entity.get());
+            FlameInfo fi;
+            fi.x = flame->getX();
+            fi.y = flame->getY();
+            fi.timer = flame->getTimer();
+            fi.ownerId = flame->getOwnerId();
+            flames.push_back(fi);
+        }
+    }
+    return flames;
 }

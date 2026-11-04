@@ -53,6 +53,19 @@ struct BombInfo {
     int slideDy = 0;
 };
 
+struct PowerUpInfo {
+    int x = 0;
+    int y = 0;
+    char type = ' ';
+};
+
+struct FlameInfo {
+    int x = 0;
+    int y = 0;
+    int timer = 0;
+    int ownerId = -1;
+};
+
 class Game {
 private:
     World m_world;
@@ -72,6 +85,8 @@ public:
 
     PlayerInfo getPlayerInfo(int playerId) const;
     std::vector<BombInfo> getBombs() const;
+    std::vector<PowerUpInfo> getPowerUps() const;
+    std::vector<FlameInfo> getFlames() const;
 
     // Deterministic setup helpers for unit testing & custom scenarios
     void clearBoard();
