@@ -9,10 +9,10 @@ class AssetManager:
         self._generate_assets()
 
     def _generate_assets(self):
-        # 1. Floor (Beige/Tan color)
+        # 1. Floor (Dark grey/brown asphalt color matching the original)
         floor = pygame.Surface((TILE_SIZE, TILE_SIZE))
-        floor.fill((193, 175, 126))
-        pygame.draw.rect(floor, (170, 150, 100), (0, 0, TILE_SIZE, TILE_SIZE), 1)
+        floor.fill((45, 42, 42))  
+        pygame.draw.rect(floor, (35, 32, 32), (0, 0, TILE_SIZE, TILE_SIZE), 1)
         self.surfaces['floor'] = floor
 
         # 2. Solid Wall (Khaki/Sand square with inner border)
@@ -38,6 +38,42 @@ class AssetManager:
             'H': ((180, 180, 180), "H"), # Grey (Hammer)
             'R': ((255, 215, 0), "R")    # Gold (Ring)
         }
+        # 5. Players, Bombs, and Flames (Colored by Player ID)
+        self.player_colors = {
+            1: (50, 100, 255),  # Blue
+            2: (220, 50, 50),   # Red
+            3: (160, 50, 200),  # Purple
+            4: (50, 200, 50)    # Green
+        }
+
+        for pid, color in self.player_colors.items():
+            # Player Sprite
+            player_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            pygame.draw.circle(player_surf, color, (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 4)
+            pygame.draw.circle(player_surf, (20, 20, 20), (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 4, 3)
+            # Simple eyes
+            pygame.draw.circle(player_surf, (255, 255, 255), (TILE_SIZE // 2 - 8, TILE_SIZE // 2 - 5), 4)
+            pygame.draw.circle(player_surf, (255, 255, 255), (TILE_SIZE // 2 + 8, TILE_SIZE // 2 - 5), 4)
+            self.surfaces[f'player_{pid}'] = player_surf
+
+            # Bomb Sprite
+            bomb_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            pygame.draw.circle(bomb_surf, (30, 30, 30), (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 8)
+            # Colored outline matching the owner
+            pygame.draw.circle(bomb_surf, color, (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 8, 3)
+            self.surfaces[f'bomb_{pid}'] = bomb_surf
+
+            # Flame Sprite (Cross/Plasma shape)
+            flame_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            # Outer glow
+            pygame.draw.rect(flame_surf, color, (TILE_SIZE // 4, 0, TILE_SIZE // 2, TILE_SIZE), border_radius=8)
+            pygame.draw.rect(flame_surf, color, (0, TILE_SIZE // 4, TILE_SIZE, TILE_SIZE // 2), border_radius=8)
+            # Inner bright core
+            bright_color = (min(255, color[0] + 100), min(255, color[1] + 100), min(255, color[2] + 100))
+            pygame.draw.rect(flame_surf, bright_color, (TILE_SIZE // 3, TILE_SIZE // 6, TILE_SIZE // 3, 2 * TILE_SIZE // 3), border_radius=4)
+            pygame.draw.rect(flame_surf, bright_color, (TILE_SIZE // 6, TILE_SIZE // 3, 2 * TILE_SIZE // 3, TILE_SIZE // 3), border_radius=4)
+            self.surfaces[f'flame_{pid}'] = flame_surf
+        
 
         for key, (color, text) in pu_colors.items():
             surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)

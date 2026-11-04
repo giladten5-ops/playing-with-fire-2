@@ -5,6 +5,7 @@ from gui.config import *
 from gui.state_snapshot import SnapshotBuilder
 from gui.assets import AssetManager
 from gui.board_renderer import BoardRenderer
+from gui.controllers import KeyboardController
 
 
 class BombermanGUIApp:
@@ -24,6 +25,12 @@ class BombermanGUIApp:
         
         self.assets = AssetManager()
         self.board_renderer = BoardRenderer(self.assets)
+
+        self.assets = AssetManager()
+        self.board_renderer = BoardRenderer(self.assets)
+        
+        # Initialize input controller
+        self.controller = KeyboardController()
         
         # Timing variables for the Accumulator pattern
         self.accumulator = 0.0
@@ -42,7 +49,7 @@ class BombermanGUIApp:
                 return False
             elif event.type == pygame.KEYDOWN:
                 # Toggle pause with SPACE
-                if event.key == pygame.K_SPACE:
+                if event.key == pygame.K_p:
                     self.paused = not self.paused
                 # Single step debugging with 'N' when paused
                 elif event.key == pygame.K_n and self.paused:
@@ -67,10 +74,11 @@ class BombermanGUIApp:
             if not self.paused:
                 self.accumulator += dt * self.sim_speed
 
-            # Advance engine in fixed timesteps
+           # Advance engine in fixed timesteps
             while self.accumulator >= TICK_DURATION:
-                # Currently pushing NONE, later we'll pass controller commands here
-                self.game.update(bme.Command.NONE)
+                # Get input from keyboard and step the engine
+                cmd = self.controller.get_command()
+                self.game.update(cmd)
                 self.accumulator -= TICK_DURATION
 
             # Calculate interpolation factor (alpha)
