@@ -1,0 +1,20 @@
+import pygame
+
+# --- Display Settings ---
+TILE_SIZE = 56
+BOARD_WIDTH_TILES = 13
+BOARD_HEIGHT_TILES = 13
+HUD_WIDTH = 320
+
+# Calculate total window dimensions
+WINDOW_WIDTH = (BOARD_WIDTH_TILES * TILE_SIZE) + HUD_WIDTH
+WINDOW_HEIGHT = BOARD_HEIGHT_TILES * TILE_SIZE
+
+# --- Timing ---
+TARGET_FPS = 60
+ENGINE_TICK_RATE = 30
+TICK_DURATION = 1.0 / ENGINE_TICK_RATE
+
+# --- Colors ---
+COLOR_BG = (30, 30, 30)
+COLOR_GRID = (50, 50, 50)

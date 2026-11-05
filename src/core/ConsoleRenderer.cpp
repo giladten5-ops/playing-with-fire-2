@@ -65,7 +65,7 @@ void ConsoleRenderer::render(const World& world, int sdTimerTicks, bool sdActive
 
     std::cout << "\n============================================\n";
     
-    // תצוגת ההתראה של פתאום-מוות
+    // Display Sudden Death countdown or active alert
     if (sdActive) {
         std::cout << "      !!! SUDDEN DEATH ACTIVE !!!\n";
     } else if (sdTimerTicks >= 0) {

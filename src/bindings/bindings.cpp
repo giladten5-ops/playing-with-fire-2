@@ -25,6 +25,11 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .value("PLACE_BOMB", Command::PLACE_BOMB)
         .export_values();
 
+    py::class_<PlayerCommand>(m, "PlayerCommand")
+        .def(py::init<int, Command>(), py::arg("playerId"), py::arg("command"))
+        .def_readwrite("playerId", &PlayerCommand::playerId)
+        .def_readwrite("command", &PlayerCommand::command);
+
     py::class_<StepResult>(m, "StepResult")
         .def_readonly("isDone", &StepResult::isDone)
         .def_readonly("reward", &StepResult::reward)
@@ -48,6 +53,7 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("bombRadius", &PlayerInfo::bombRadius)
         .def_readonly("speedLevel", &PlayerInfo::speedLevel)
         .def_readonly("cooldown", &PlayerInfo::cooldown)
+        .def_readonly("moveCooldownMax", &PlayerInfo::moveCooldownMax)
         .def_readonly("invincibilityTimer", &PlayerInfo::invincibilityTimer)
         .def_readonly("facingDx", &PlayerInfo::facingDx)
         .def_readonly("facingDy", &PlayerInfo::facingDy)
@@ -65,7 +71,9 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("creditOwnerId", &BombInfo::creditOwnerId)
         .def_readonly("isSliding", &BombInfo::isSliding)
         .def_readonly("slideDx", &BombInfo::slideDx)
-        .def_readonly("slideDy", &BombInfo::slideDy);
+        .def_readonly("slideDy", &BombInfo::slideDy)
+        .def_readonly("slideCooldown", &BombInfo::slideCooldown)
+        .def_readonly("slideCooldownMax", &BombInfo::slideCooldownMax);
 
     py::class_<PowerUpInfo>(m, "PowerUpInfo")
         .def_readonly("x", &PowerUpInfo::x)
@@ -91,7 +99,9 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("reset", &Game::reset)
         .def("step", &Game::step)
         .def("update", py::overload_cast<Command>(&Game::update), py::arg("command") = Command::NONE)
+        .def("updateCommands", py::overload_cast<const std::vector<PlayerCommand>&>(&Game::update), py::arg("commands"))
         .def("getState", &Game::getState)
+        .def("getBoardGrid", &Game::getBoardGrid)
         .def("getPlayerInfo", &Game::getPlayerInfo)
         .def("getBombs", &Game::getBombs)
         .def("getPowerUps", &Game::getPowerUps)

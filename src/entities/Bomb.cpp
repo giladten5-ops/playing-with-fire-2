@@ -15,6 +15,7 @@ int Bomb::getTimer() const { return m_timer; }
 bool Bomb::isSliding() const { return m_dx != 0 || m_dy != 0; }
 int Bomb::getSlideDx() const { return m_dx; }
 int Bomb::getSlideDy() const { return m_dy; }
+int Bomb::getSlideCooldown() const { return m_slideCooldown; }
 
 EntityType Bomb::getType() const {
     return EntityType::BOMB;
@@ -46,7 +47,7 @@ void Bomb::update(World& world) {
             if (canSlideTo(world, nextX, nextY)) {
                 setX(nextX);
                 setY(nextY);
-                m_slideCooldown = 2; // SLIDE_COOLDOWN_FRAMES
+                m_slideCooldown = SLIDE_COOLDOWN_FRAMES;
             } else {
                 m_dx = 0;
                 m_dy = 0;

@@ -115,6 +115,7 @@ PlayerInfo Game::getPlayerInfo(int playerId) const {
     info.bombRadius = p->getBombRadius();
     info.speedLevel = p->getSpeedLevel();
     info.cooldown = p->getCooldown();
+    info.moveCooldownMax = std::max(1, Player::BASE_MOVE_COOLDOWN - (p->getSpeedLevel() * 2));
     info.invincibilityTimer = p->getInvincibilityTimer();
     info.facingDx = p->getFacingDx();
     info.facingDy = p->getFacingDy();
@@ -140,6 +141,8 @@ std::vector<BombInfo> Game::getBombs() const {
             bi.isSliding = b->isSliding();
             bi.slideDx = b->getSlideDx();
             bi.slideDy = b->getSlideDy();
+            bi.slideCooldown = b->getSlideCooldown();
+            bi.slideCooldownMax = Bomb::SLIDE_COOLDOWN_FRAMES;
             bombs.push_back(bi);
         }
     }
@@ -435,4 +438,30 @@ std::vector<FlameInfo> Game::getFlames() const {
         }
     }
     return flames;
+}
+
+std::vector<std::vector<int>> Game::getBoardGrid() const {
+    const Board& board = m_world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+    std::vector<std::vector<int>> grid(height, std::vector<int>(width, 0));
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (board.getCellType(x, y) == CellType::SOLID_WALL) {
+                grid[y][x] = 1;
+            }
+        }
+    }
+
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::BREAKABLE_WALL) {
+            int ex = entity->getX();
+            int ey = entity->getY();
+            if (ex >= 0 && ex < width && ey >= 0 && ey < height) {
+                grid[ey][ex] = 2;
+            }
+        }
+    }
+    return grid;
 }

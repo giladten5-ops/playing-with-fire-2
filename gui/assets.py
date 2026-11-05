@@ -1,90 +1,184 @@
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 import pygame
-from gui.config import TILE_SIZE
+
+from gui.config import ASSETS_DIR, PLAYER_COLORS, TILE_SIZE
+
 
 class AssetManager:
-    def __init__(self):
-        self.surfaces = {}
-        # We must call init for fonts
-        pygame.font.init() 
-        self._generate_assets()
+    """
+    Manages game surfaces and sprites.
+    Loads external PNG assets from ASSETS_DIR if present, and generates
+    classic Playing with Fire 2 styled procedural sprites as a fallback.
+    """
 
-    def _generate_assets(self):
-        # 1. Floor (Dark grey/brown asphalt color matching the original)
+    def __init__(self, assets_dir: Optional[Path] = None) -> None:
+        self.assets_dir = Path(assets_dir) if assets_dir else ASSETS_DIR
+        self.surfaces: Dict[str, pygame.Surface] = {}
+        self.player_colors: Dict[int, Tuple[int, int, int]] = dict(PLAYER_COLORS)
+        pygame.font.init()
+        self._generate_procedural_assets()
+        self._load_external_overrides()
+
+    def _load_external_overrides(self) -> None:
+        if not self.assets_dir.exists() or not self.assets_dir.is_dir():
+            return
+        for png_file in self.assets_dir.glob("*.png"):
+            key = png_file.stem
+            try:
+                loaded = pygame.image.load(str(png_file))
+                if pygame.display.get_surface() is not None:
+                    loaded = loaded.convert_alpha()
+                scaled = pygame.transform.smoothscale(loaded, (TILE_SIZE, TILE_SIZE))
+                self.surfaces[key] = scaled
+            except Exception:
+                continue
+
+    def _generate_procedural_assets(self) -> None:
+        # 1. Floor (Dark asphalt tile with subtle grid bevel)
         floor = pygame.Surface((TILE_SIZE, TILE_SIZE))
-        floor.fill((45, 42, 42))  
-        pygame.draw.rect(floor, (35, 32, 32), (0, 0, TILE_SIZE, TILE_SIZE), 1)
-        self.surfaces['floor'] = floor
+        floor.fill((45, 42, 42))
+        pygame.draw.rect(floor, (52, 49, 49), (1, 1, TILE_SIZE - 2, TILE_SIZE - 2), 1)
+        pygame.draw.rect(floor, (33, 30, 30), (0, 0, TILE_SIZE, TILE_SIZE), 1)
+        self.surfaces["floor"] = floor
 
-        # 2. Solid Wall (Khaki/Sand square with inner border)
+        # 2. Solid Wall (Khaki/Sandstone beveled pillar matching original game)
         solid = pygame.Surface((TILE_SIZE, TILE_SIZE))
         solid.fill((185, 165, 110))
-        pygame.draw.rect(solid, (140, 120, 80), (0, 0, TILE_SIZE, TILE_SIZE), 4)
-        self.surfaces['solid'] = solid
+        pygame.draw.polygon(
+            solid,
+            (215, 198, 145),
+            [(0, 0), (TILE_SIZE, 0), (TILE_SIZE - 6, 6), (6, 6), (6, TILE_SIZE - 6), (0, TILE_SIZE)],
+        )
+        pygame.draw.polygon(
+            solid,
+            (130, 112, 72),
+            [(TILE_SIZE, 0), (TILE_SIZE, TILE_SIZE), (0, TILE_SIZE), (6, TILE_SIZE - 6), (TILE_SIZE - 6, TILE_SIZE - 6), (TILE_SIZE - 6, 6)],
+        )
+        pygame.draw.rect(solid, (105, 90, 58), (0, 0, TILE_SIZE, TILE_SIZE), 2)
+        self.surfaces["solid"] = solid
 
-        # 3. Breakable Wall (Brown reddish barrel style)
-        breakable = pygame.Surface((TILE_SIZE, TILE_SIZE))
-        breakable.fill((164, 98, 98))
-        pygame.draw.line(breakable, (120, 60, 60), (0, TILE_SIZE // 3), (TILE_SIZE, TILE_SIZE // 3), 3)
-        pygame.draw.line(breakable, (120, 60, 60), (0, 2 * TILE_SIZE // 3), (TILE_SIZE, 2 * TILE_SIZE // 3), 3)
-        pygame.draw.rect(breakable, (100, 50, 50), (0, 0, TILE_SIZE, TILE_SIZE), 2)
-        self.surfaces['breakable'] = breakable
+        # 3. Breakable Wall (Classic wooden/reddish barrel with metal bands)
+        breakable = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        barrel_rect = pygame.Rect(4, 2, TILE_SIZE - 8, TILE_SIZE - 4)
+        pygame.draw.rect(breakable, (164, 96, 86), barrel_rect, border_radius=8)
+        for plank_x in range(12, TILE_SIZE - 10, 10):
+            pygame.draw.line(breakable, (135, 75, 68), (plank_x, 4), (plank_x, TILE_SIZE - 5), 2)
+        pygame.draw.rect(breakable, (85, 85, 95), (4, TILE_SIZE // 3 - 2, TILE_SIZE - 8, 5))
+        pygame.draw.rect(breakable, (85, 85, 95), (4, (2 * TILE_SIZE) // 3 - 2, TILE_SIZE - 8, 5))
+        pygame.draw.rect(breakable, (95, 48, 42), barrel_rect, 2, border_radius=8)
+        self.surfaces["breakable"] = breakable
 
-        # 4. Power-ups (Dark square with colored letter for now)
-        font = pygame.font.SysFont(None, 36, bold=True)
+        # 4. Power-up Badges
+        font = pygame.font.SysFont(None, 32, bold=True)
         pu_colors = {
-            'S': ((255, 165, 0), "S"),   # Orange (Speed)
-            'L': ((50, 100, 255), "L"),  # Blue (Lightning/Radius)
-            '+': ((200, 50, 50), "+"),   # Red (Bomb amount)
-            'H': ((180, 180, 180), "H"), # Grey (Hammer)
-            'R': ((255, 215, 0), "R")    # Gold (Ring)
+            "S": ((255, 165, 0), "S"),   # Speed
+            "L": ((60, 140, 255), "L"),  # Lightning / Radius
+            "+": ((235, 65, 65), "+"),   # Extra Bomb
+            "H": ((195, 195, 205), "H"), # Hammer
+            "R": ((255, 215, 40), "R"),  # Ring
         }
-        # 5. Players, Bombs, and Flames (Colored by Player ID)
-        self.player_colors = {
-            1: (50, 100, 255),  # Blue
-            2: (220, 50, 50),   # Red
-            3: (160, 50, 200),  # Purple
-            4: (50, 200, 50)    # Green
+        for key, (color, text) in pu_colors.items():
+            surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            box = pygame.Rect(TILE_SIZE // 6, TILE_SIZE // 6, (2 * TILE_SIZE) // 3, (2 * TILE_SIZE) // 3)
+            pygame.draw.rect(surf, (30, 34, 42), box, border_radius=6)
+            pygame.draw.rect(surf, color, box, 3, border_radius=6)
+            text_surf = font.render(text, True, color)
+            text_rect = text_surf.get_rect(center=(TILE_SIZE // 2, TILE_SIZE // 2))
+            surf.blit(text_surf, text_rect)
+            self.surfaces[f"powerup_{key}"] = surf
+
+        # 5. Players (Directional + Walking frames), Bombs (Pulsing), and Plasma Flames
+        directions = {
+            "down": (0, 1),
+            "up": (0, -1),
+            "left": (-1, 0),
+            "right": (1, 0),
         }
 
         for pid, color in self.player_colors.items():
-            # Player Sprite
-            player_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            pygame.draw.circle(player_surf, color, (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 4)
-            pygame.draw.circle(player_surf, (20, 20, 20), (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 4, 3)
-            # Simple eyes
-            pygame.draw.circle(player_surf, (255, 255, 255), (TILE_SIZE // 2 - 8, TILE_SIZE // 2 - 5), 4)
-            pygame.draw.circle(player_surf, (255, 255, 255), (TILE_SIZE // 2 + 8, TILE_SIZE // 2 - 5), 4)
-            self.surfaces[f'player_{pid}'] = player_surf
+            for dir_name, (dx, dy) in directions.items():
+                for frame in (0, 1):
+                    psurf = self._create_player_sprite(color, dx, dy, frame)
+                    self.surfaces[f"player_{pid}_{dir_name}_{frame}"] = psurf
+                self.surfaces[f"player_{pid}_{dir_name}"] = self.surfaces[f"player_{pid}_{dir_name}_0"]
 
-            # Bomb Sprite
-            bomb_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            pygame.draw.circle(bomb_surf, (30, 30, 30), (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 8)
-            # Colored outline matching the owner
-            pygame.draw.circle(bomb_surf, color, (TILE_SIZE // 2, TILE_SIZE // 2), TILE_SIZE // 2 - 8, 3)
-            self.surfaces[f'bomb_{pid}'] = bomb_surf
+            self.surfaces[f"player_{pid}"] = self.surfaces[f"player_{pid}_down_0"]
 
-            # Flame Sprite (Cross/Plasma shape)
-            flame_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            # Outer glow
-            pygame.draw.rect(flame_surf, color, (TILE_SIZE // 4, 0, TILE_SIZE // 2, TILE_SIZE), border_radius=8)
-            pygame.draw.rect(flame_surf, color, (0, TILE_SIZE // 4, TILE_SIZE, TILE_SIZE // 2), border_radius=8)
-            # Inner bright core
-            bright_color = (min(255, color[0] + 100), min(255, color[1] + 100), min(255, color[2] + 100))
-            pygame.draw.rect(flame_surf, bright_color, (TILE_SIZE // 3, TILE_SIZE // 6, TILE_SIZE // 3, 2 * TILE_SIZE // 3), border_radius=4)
-            pygame.draw.rect(flame_surf, bright_color, (TILE_SIZE // 6, TILE_SIZE // 3, 2 * TILE_SIZE // 3, TILE_SIZE // 3), border_radius=4)
-            self.surfaces[f'flame_{pid}'] = flame_surf
-        
+            for phase in range(3):
+                bsurf = self._create_bomb_sprite(color, phase)
+                self.surfaces[f"bomb_{pid}_{phase}"] = bsurf
+            self.surfaces[f"bomb_{pid}"] = self.surfaces[f"bomb_{pid}_0"]
 
-        for key, (color, text) in pu_colors.items():
-            surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-            # Dark background box
-            pygame.draw.rect(surf, (40, 45, 50), (TILE_SIZE//6, TILE_SIZE//6, 2*TILE_SIZE//3, 2*TILE_SIZE//3))
-            pygame.draw.rect(surf, color, (TILE_SIZE//6, TILE_SIZE//6, 2*TILE_SIZE//3, 2*TILE_SIZE//3), 2)
-            # Letter
-            text_surf = font.render(text, True, color)
-            text_rect = text_surf.get_rect(center=(TILE_SIZE//2, TILE_SIZE//2))
-            surf.blit(text_surf, text_rect)
-            self.surfaces[f'powerup_{key}'] = surf
+            fsurf = self._create_flame_sprite(color)
+            self.surfaces[f"flame_{pid}"] = fsurf
 
-    def get(self, name: str) -> pygame.Surface:
+    def _create_player_sprite(
+        self, color: Tuple[int, int, int], dx: int, dy: int, frame: int
+    ) -> pygame.Surface:
+        surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        cx, cy = TILE_SIZE // 2, TILE_SIZE // 2
+
+        # Ground shadow
+        pygame.draw.ellipse(surf, (0, 0, 0, 95), (10, TILE_SIZE - 12, TILE_SIZE - 20, 8))
+
+        # Feet (animated shift based on frame)
+        foot_offset = 3 if frame == 1 else -2
+        pygame.draw.circle(surf, (40, 40, 45), (cx - 8, TILE_SIZE - 9 + foot_offset), 5)
+        pygame.draw.circle(surf, (40, 40, 45), (cx + 8, TILE_SIZE - 9 - foot_offset), 5)
+
+        # Body & Helmet
+        pygame.draw.circle(surf, color, (cx, cy - 1), TILE_SIZE // 2 - 7)
+        highlight = (min(255, color[0] + 70), min(255, color[1] + 70), min(255, color[2] + 70))
+        pygame.draw.circle(surf, highlight, (cx - 6, cy - 8), 5)
+        pygame.draw.circle(surf, (20, 20, 25), (cx, cy - 1), TILE_SIZE // 2 - 7, 2)
+
+        # Visor & Eyes (omitted when facing up)
+        if dy >= 0:
+            visor_x = cx + dx * 5
+            visor_y = cy - 3 + dy * 2
+            visor_rect = pygame.Rect(visor_x - 11, visor_y - 6, 22, 12)
+            pygame.draw.rect(surf, (240, 235, 220), visor_rect, border_radius=5)
+            pygame.draw.rect(surf, (30, 30, 35), visor_rect, 1, border_radius=5)
+            pygame.draw.circle(surf, (20, 20, 25), (visor_x - 5 + dx * 2, visor_y), 2)
+            pygame.draw.circle(surf, (20, 20, 25), (visor_x + 5 + dx * 2, visor_y), 2)
+
+        return surf
+
+    def _create_bomb_sprite(self, owner_color: Tuple[int, int, int], phase: int) -> pygame.Surface:
+        surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        cx, cy = TILE_SIZE // 2, TILE_SIZE // 2 + 2
+        radius = (TILE_SIZE // 2 - 10) + phase * 2
+
+        pygame.draw.circle(surf, (28, 30, 35), (cx, cy), radius)
+        pygame.draw.circle(surf, (80, 85, 95), (cx - 5, cy - 5), max(2, radius // 3))
+        pygame.draw.circle(surf, owner_color, (cx, cy), radius, 3)
+
+        # Fuse and spark
+        pygame.draw.line(surf, (180, 160, 120), (cx, cy - radius), (cx + 6, 6), 3)
+        spark_color = (255, 240, 80) if phase < 2 else (255, 80, 40)
+        pygame.draw.circle(surf, spark_color, (cx + 6, 6), 4 + phase)
+        return surf
+
+    def _create_flame_sprite(self, color: Tuple[int, int, int]) -> pygame.Surface:
+        flame_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+        pygame.draw.rect(flame_surf, color, (TILE_SIZE // 4, 0, TILE_SIZE // 2, TILE_SIZE), border_radius=8)
+        pygame.draw.rect(flame_surf, color, (0, TILE_SIZE // 4, TILE_SIZE, TILE_SIZE // 2), border_radius=8)
+
+        bright_color = (min(255, color[0] + 100), min(255, color[1] + 100), min(255, color[2] + 100))
+        pygame.draw.rect(
+            flame_surf,
+            bright_color,
+            (TILE_SIZE // 3, TILE_SIZE // 6, TILE_SIZE // 3, (2 * TILE_SIZE) // 3),
+            border_radius=4,
+        )
+        pygame.draw.rect(
+            flame_surf,
+            bright_color,
+            (TILE_SIZE // 6, TILE_SIZE // 3, (2 * TILE_SIZE) // 3, TILE_SIZE // 3),
+            border_radius=4,
+        )
+        return flame_surf
+
+    def get(self, name: str) -> Optional[pygame.Surface]:
         return self.surfaces.get(name)

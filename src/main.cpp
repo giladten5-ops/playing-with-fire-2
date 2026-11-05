@@ -85,7 +85,7 @@ int main() {
 
         game.update(commands);
         
-        // מעבירים לרינדור גם את זמן הסיום כדי שיוצג ב-HUD
+        // Pass Sudden Death timer and active status to the console renderer
         renderer.render(game.getWorld(), game.getSuddenDeathTimer(), game.isSuddenDeathActive());
 
         if (game.isGameOver()) {

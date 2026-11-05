@@ -32,6 +32,7 @@ struct PlayerInfo {
     int bombRadius = 2;
     int speedLevel = 0;
     int cooldown = 0;
+    int moveCooldownMax = 4;
     int invincibilityTimer = 0;
     int facingDx = 0;
     int facingDy = 1;
@@ -51,6 +52,8 @@ struct BombInfo {
     bool isSliding = false;
     int slideDx = 0;
     int slideDy = 0;
+    int slideCooldown = 0;
+    int slideCooldownMax = 2;
 };
 
 struct PowerUpInfo {
@@ -82,6 +85,7 @@ public:
     void reset(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
     StepResult step(int playerId, Command action);
     std::vector<float> getState(int playerId) const;
+    std::vector<std::vector<int>> getBoardGrid() const;
 
     PlayerInfo getPlayerInfo(int playerId) const;
     std::vector<BombInfo> getBombs() const;
