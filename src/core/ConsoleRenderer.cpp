@@ -32,6 +32,9 @@ void ConsoleRenderer::render(const World& world, int sdTimerTicks, bool sdActive
             if (cellType == CellType::SOLID_WALL) {
                 display[x][y] = '#';
                 priority[x][y] = 10;
+            } else if (cellType == CellType::BREAKABLE_WALL) {
+                display[x][y] = 'B';
+                priority[x][y] = 3;
             }
         }
     }

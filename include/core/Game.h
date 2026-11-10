@@ -12,6 +12,7 @@ struct StepResult {
     bool isDone = false;
     float reward = 0.0f;
     int wallsDestroyed = 0;
+    int enemiesHit = 0;
     int enemiesKilled = 0;
     int powerUpsCollected = 0;
     int livesLost = 0;
@@ -83,7 +84,8 @@ public:
 
     void loadLevel(ILevel& level, int numHumanPlayers = 0, int numBots = 0, bool shuffleSpawns = true);
     void reset(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
-    StepResult step(int playerId, Command action);
+    StepResult step(int playerId, Command action, const std::vector<PlayerCommand>& extraCommands = {});
+    void fillState(int playerId, float* state) const;
     std::vector<float> getState(int playerId) const;
     std::vector<std::vector<int>> getBoardGrid() const;
 
@@ -108,5 +110,6 @@ public:
     int getWinnerId() const;
 
     int getSuddenDeathTimer() const;
+    void setSuddenDeathTimer(int ticks);
     bool isSuddenDeathActive() const;
 };

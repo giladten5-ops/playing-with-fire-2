@@ -118,6 +118,7 @@ void World::clear() {
     m_spawnQueue.clear();
     m_wallsDestroyedByOwner.clear();
     m_enemiesKilledByOwner.clear();
+    m_enemiesHitByOwner.clear();
 
     int width = m_board.getWidth();
     int height = m_board.getHeight();
@@ -131,9 +132,13 @@ void World::clear() {
 
 int World::countBreakableWalls() const {
     int count = 0;
-    for (const auto& entity : m_entities) {
-        if (entity->isAlive() && entity->getType() == EntityType::BREAKABLE_WALL) {
-            count++;
+    int width = m_board.getWidth();
+    int height = m_board.getHeight();
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            if (m_board.getCellType(x, y) == CellType::BREAKABLE_WALL) {
+                count++;
+            }
         }
     }
     return count;
@@ -164,6 +169,22 @@ void World::recordEnemyKilled(int ownerId) {
 int World::popEnemiesKilled(int ownerId) {
     auto it = m_enemiesKilledByOwner.find(ownerId);
     if (it == m_enemiesKilledByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
+    return count;
+}
+
+void World::recordEnemyHit(int ownerId) {
+    if (ownerId > 0) {
+        m_enemiesHitByOwner[ownerId]++;
+    }
+}
+
+int World::popEnemiesHit(int ownerId) {
+    auto it = m_enemiesHitByOwner.find(ownerId);
+    if (it == m_enemiesHitByOwner.end()) {
         return 0;
     }
     int count = it->second;

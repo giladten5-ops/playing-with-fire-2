@@ -1,5 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include "../../include/core/Game.h"
@@ -34,6 +36,7 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("isDone", &StepResult::isDone)
         .def_readonly("reward", &StepResult::reward)
         .def_readonly("wallsDestroyed", &StepResult::wallsDestroyed)
+        .def_readonly("enemiesHit", &StepResult::enemiesHit)
         .def_readonly("enemiesKilled", &StepResult::enemiesKilled)
         .def_readonly("powerUpsCollected", &StepResult::powerUpsCollected)
         .def_readonly("livesLost", &StepResult::livesLost)
@@ -97,10 +100,22 @@ PYBIND11_MODULE(bomberman_engine, m) {
     py::class_<Game>(m, "Game")
         .def(py::init<int, int>())
         .def("reset", &Game::reset)
-        .def("step", &Game::step)
+        .def("step", &Game::step,
+             py::arg("playerId"),
+             py::arg("action"),
+             py::arg("extraCommands") = std::vector<PlayerCommand>{})
         .def("update", py::overload_cast<Command>(&Game::update), py::arg("command") = Command::NONE)
         .def("updateCommands", py::overload_cast<const std::vector<PlayerCommand>&>(&Game::update), py::arg("commands"))
-        .def("getState", &Game::getState)
+        .def("getState", [](const Game& self, int playerId) {
+            const int width = self.getWorld().getBoard().getWidth();
+            const int height = self.getWorld().getBoard().getHeight();
+            constexpr int channels = 10;
+            py::array_t<float> result({channels, height, width});
+            float* ptr = static_cast<float*>(result.request().ptr);
+            std::fill(ptr, ptr + (channels * height * width), 0.0f);
+            self.fillState(playerId, ptr);
+            return result;
+        }, py::arg("playerId"))
         .def("getBoardGrid", &Game::getBoardGrid)
         .def("getPlayerInfo", &Game::getPlayerInfo)
         .def("getBombs", &Game::getBombs)
@@ -116,5 +131,6 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("isGameOver", &Game::isGameOver)
         .def("getWinnerId", &Game::getWinnerId)
         .def("getSuddenDeathTimer", &Game::getSuddenDeathTimer)
+        .def("setSuddenDeathTimer", &Game::setSuddenDeathTimer)
         .def("isSuddenDeathActive", &Game::isSuddenDeathActive);
 }

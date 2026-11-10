@@ -3,11 +3,13 @@
 #include "../../include/entities/Flame.h"
 #include "../../include/entities/Bomb.h"
 #include "../../include/entities/Player.h"
+#include "../../include/factories/PowerUpFactory.h"
 
 void ExplosionSystem::process(World& world) {
     bool hasExplodingBombs = true;
+    int maxIterations = static_cast<int>(world.getEntities().size()) + 16;
 
-    while (hasExplodingBombs) {
+    while (hasExplodingBombs && maxIterations-- > 0) {
         hasExplodingBombs = false;
 
         const auto& entities = world.getEntities();
@@ -47,19 +49,29 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ow
         return false;
     }
 
-    if (world.getBoard().getCellType(targetX, targetY) == CellType::SOLID_WALL) {
+    CellType cellType = world.getBoard().getCellType(targetX, targetY);
+    if (cellType == CellType::SOLID_WALL) {
         return false;
     }
 
     bool explosionStopped = false;
+    if (cellType == CellType::BREAKABLE_WALL) {
+        world.getBoard().setCellType(targetX, targetY, CellType::EMPTY);
+        if (ownerId > 0) {
+            world.recordWallDestroyed(ownerId);
+        }
+        PowerUpFactory::trySpawn(world, targetX, targetY);
+        explosionStopped = true;
+    }
+
     auto entitiesHere = world.getEntitiesAt(targetX, targetY);
 
     for (auto* entity : entitiesHere) {
         if (entity->isAlive()) {
             EntityType type = entity->getType();
-            bool isBreakable = (type == EntityType::BREAKABLE_WALL);
             bool isPlayer = (type == EntityType::PLAYER);
             int victimId = isPlayer ? static_cast<Player*>(entity)->getId() : -1;
+            int livesBefore = isPlayer ? static_cast<Player*>(entity)->getLives() : 0;
             bool blocksBlast = entity->stopsExplosion();
 
             if (type == EntityType::BOMB && ownerId > 0) {
@@ -69,11 +81,14 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ow
 
             entity->onExplosionHit(world);
 
-            if (isBreakable && !entity->isAlive() && ownerId > 0) {
-                world.recordWallDestroyed(ownerId);
-            }
-            if (isPlayer && !entity->isAlive() && ownerId > 0 && ownerId != victimId) {
-                world.recordEnemyKilled(ownerId);
+            if (isPlayer && ownerId > 0 && ownerId != victimId) {
+                int livesAfter = entity->isAlive() ? static_cast<Player*>(entity)->getLives() : 0;
+                if (livesAfter < livesBefore) {
+                    world.recordEnemyHit(ownerId);
+                }
+                if (!entity->isAlive()) {
+                    world.recordEnemyKilled(ownerId);
+                }
             }
 
             if (blocksBlast) {

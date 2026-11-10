@@ -9,7 +9,8 @@ public:
     static constexpr int INITIAL_MAX_BOMBS = 1;
     static constexpr int DEFAULT_BOMB_TIMER = 90;
     static constexpr int INVINCIBILITY_FRAMES = 60;
-    static constexpr int BASE_MOVE_COOLDOWN = 4;
+    static constexpr int BASE_MOVE_COOLDOWN = 6;
+    static constexpr int MIN_MOVE_COOLDOWN = 4;
     static constexpr int MAX_SPEED_LEVEL = 2;
 
 private:
@@ -41,6 +42,7 @@ public:
     int getBombRadius() const;
     int getSpeedLevel() const;
     int getCooldown() const;
+    int getMoveCooldownMax() const;
     int getInvincibilityTimer() const;
     int getFacingDx() const;
     int getFacingDy() const;
@@ -57,6 +59,7 @@ public:
     void update(World& world) override;
     void handleCommand(Command command, World& world) override;
     void onExplosionHit(World& world) override;
+    void onExplosionHit(World& world, bool bypassInvincibility);
 
     void increaseBombRadius();
     void increaseMaxBombs();

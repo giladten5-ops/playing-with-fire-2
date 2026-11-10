@@ -1,17 +1,42 @@
 # 1. C++ Build artifacts and binaries
+build/
 *.o
+*.d
+*.so
 bomberman
 bomberman_engine*.so
 
-# 2. Python Environment and Cache
+# 2. Python Environment, Cache, and Packaging
 venv/
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 3. Machine Learning Models and Checkpoints
-*.zip
+# 3. Machine Learning Models, Checkpoints, and Training Logs
+models/
 ppo_bomberman_v1/
+*.zip
+*.npz
+*.pt
+*.pth
+tensorboard/
+logs/
+runs/
 
-# 4. OS specific files
+# 4. Local Backups, Scratch Scripts, and Dumps
+.backups/
+apply_architecture_upgrade.py
+all_code_dump.txt
+
+# 5. OS and IDE specific files
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+assets/

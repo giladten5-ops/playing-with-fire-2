@@ -34,6 +34,7 @@ class PlayerSnapshot:
     is_bot: bool
     is_alive: bool
     is_moving: bool = False
+    is_trained_ai: bool = False
 
 
 @dataclass
@@ -92,10 +93,14 @@ class GameSnapshot:
 class IGameSession(Protocol):
     """Abstract boundary interface between the GUI presentation layer and the game engine."""
 
-    def reset(self, num_human: int = 1, num_bots: int = 3) -> None:
+    def reset(self, num_human: int = 1, num_bots: int = 3, level_id: int = 1) -> None:
         ...
 
-    def step_tick(self, action: PlayerAction) -> None:
+    def step_tick(
+        self,
+        action: PlayerAction,
+        p2_action: Optional[PlayerAction] = None,
+    ) -> None:
         ...
 
     def get_snapshot(self, alpha: float, ai_debug: Optional[AIDebugSnapshot] = None) -> GameSnapshot:

@@ -4,6 +4,7 @@
 enum class CellType {
     EMPTY, // empty cell = 0
     SOLID_WALL, // solid wall = 1
+    BREAKABLE_WALL, // breakable wall = 2
 };
 
 class Board {

@@ -1,3 +1,5 @@
+from collections import OrderedDict
+from typing import Dict, Optional, Tuple
 import pygame
 
 from gui.assets import AssetManager
@@ -9,14 +11,85 @@ class BoardRenderer:
     """
     Renders the 13x13 game board, entities, animations, AI debug heatmaps,
     and Game Over / Pause overlays purely from a GameSnapshot.
+    Caches the static floor layer and the composite board (floor + walls) layer,
+    rebuilding automatically whenever a breakable wall is destroyed or a
+    Sudden Death block falls.
     """
+
+    MAX_TEXT_CACHE_SIZE: int = 128
 
     def __init__(self, assets: AssetManager) -> None:
         self.assets = assets
         self.offset_x = HUD_WIDTH
         self.offset_y = 0
+        self.board_w = BOARD_WIDTH_TILES * TILE_SIZE
+        self.board_h = BOARD_HEIGHT_TILES * TILE_SIZE
         self.font_banner = pygame.font.SysFont(None, 54, bold=True)
         self.font_sub = pygame.font.SysFont(None, 30, bold=True)
+
+        self._text_cache: "OrderedDict[Tuple[int, str, Tuple[int, int, int]], pygame.Surface]" = OrderedDict()
+        self._debug_tile_cache: Dict[int, pygame.Surface] = {}
+        self._debug_tile_overlay = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+
+        self._game_over_overlay = pygame.Surface((self.board_w, 140), pygame.SRCALPHA)
+        self._game_over_overlay.fill((15, 18, 24, 215))
+        self._pause_overlay = pygame.Surface((self.board_w, 100), pygame.SRCALPHA)
+        self._pause_overlay.fill((15, 18, 24, 195))
+        if pygame.display.get_surface() is not None:
+            self._game_over_overlay = self._game_over_overlay.convert_alpha()
+            self._pause_overlay = self._pause_overlay.convert_alpha()
+
+        self._floor_layer_surface: Optional[pygame.Surface] = None
+        self._cached_floor_asset: Optional[pygame.Surface] = None
+        self._cached_board_surface: Optional[pygame.Surface] = None
+        self._cached_board_state: Optional[Tuple[Tuple[int, ...], ...]] = None
+        self._cached_board_assets: Optional[
+            Tuple[Optional[pygame.Surface], Optional[pygame.Surface], Optional[pygame.Surface]]
+        ] = None
+        self._ensure_floor_layer(self.assets.get("floor"))
+        board_surf = pygame.Surface((self.board_w, self.board_h))
+        if pygame.display.get_surface() is not None:
+            board_surf = board_surf.convert()
+        self._cached_board_surface = board_surf
+
+    def invalidate_board_cache(self) -> None:
+        """Explicitly invalidates the cached static/wall board state while retaining the surface buffer."""
+        self._cached_board_state = None
+
+    def _render_text_cached(
+        self,
+        font: pygame.font.Font,
+        text: str,
+        color: Tuple[int, int, int],
+    ) -> pygame.Surface:
+        key = (id(font), text, (int(color[0]), int(color[1]), int(color[2])))
+        cached = self._text_cache.get(key)
+        if cached is not None:
+            self._text_cache.move_to_end(key)
+            return cached
+
+        surf = font.render(text, True, color)
+        if pygame.display.get_surface() is not None:
+            surf = surf.convert_alpha()
+        if len(self._text_cache) >= self.MAX_TEXT_CACHE_SIZE:
+            self._text_cache.popitem(last=False)
+        self._text_cache[key] = surf
+        return surf
+
+    def _ensure_floor_layer(self, floor_img: Optional[pygame.Surface]) -> pygame.Surface:
+        if self._floor_layer_surface is None or self._cached_floor_asset is not floor_img:
+            floor_layer = pygame.Surface((self.board_w, self.board_h))
+            floor_layer.fill((45, 42, 42))
+            if floor_img is not None:
+                for y in range(BOARD_HEIGHT_TILES):
+                    py = y * TILE_SIZE
+                    for x in range(BOARD_WIDTH_TILES):
+                        floor_layer.blit(floor_img, (x * TILE_SIZE, py))
+            if pygame.display.get_surface() is not None:
+                floor_layer = floor_layer.convert()
+            self._floor_layer_surface = floor_layer
+            self._cached_floor_asset = floor_img
+        return self._floor_layer_surface
 
     def render(
         self,
@@ -43,30 +116,56 @@ class BoardRenderer:
         solid_img = self.assets.get("solid")
         break_img = self.assets.get("breakable")
 
-        for y in range(BOARD_HEIGHT_TILES):
-            for x in range(BOARD_WIDTH_TILES):
-                px = self.offset_x + x * TILE_SIZE
-                py = self.offset_y + y * TILE_SIZE
+        board_key = tuple(tuple(row) for row in board)
+        asset_key = (floor_img, solid_img, break_img)
 
-                if floor_img:
-                    surface.blit(floor_img, (px, py))
+        if (
+            self._cached_board_surface is None
+            or self._cached_board_state != board_key
+            or self._cached_board_assets != asset_key
+        ):
+            floor_layer = self._ensure_floor_layer(floor_img)
+            if self._cached_board_surface is None:
+                board_surf = pygame.Surface((self.board_w, self.board_h))
+                if pygame.display.get_surface() is not None:
+                    board_surf = board_surf.convert()
+                self._cached_board_surface = board_surf
 
-                cell = board[y][x]
-                if cell == 1 and solid_img:
-                    surface.blit(solid_img, (px, py))
-                elif cell == 2 and break_img:
-                    surface.blit(break_img, (px, py))
+            self._cached_board_surface.blit(floor_layer, (0, 0))
+            for y in range(BOARD_HEIGHT_TILES):
+                py = y * TILE_SIZE
+                row = board_key[y]
+                for x in range(BOARD_WIDTH_TILES):
+                    cell = row[x]
+                    if cell == 1 and solid_img is not None:
+                        self._cached_board_surface.blit(solid_img, (x * TILE_SIZE, py))
+                    elif cell == 2 and break_img is not None:
+                        self._cached_board_surface.blit(break_img, (x * TILE_SIZE, py))
+
+            self._cached_board_state = board_key
+            self._cached_board_assets = asset_key
+
+        surface.blit(self._cached_board_surface, (self.offset_x, self.offset_y))
+
+    def _get_debug_tile_overlay(self, alpha: int) -> pygame.Surface:
+        quantized_alpha = max(8, min(130, (alpha // 8) * 8))
+        tile = self._debug_tile_cache.get(quantized_alpha)
+        if tile is None:
+            tile = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+            tile.fill((40, 220, 90, quantized_alpha))
+            if pygame.display.get_surface() is not None:
+                tile = tile.convert_alpha()
+            self._debug_tile_cache[quantized_alpha] = tile
+        return tile
 
     def _draw_ai_debug_overlay(self, surface: pygame.Surface, ai_debug: AIDebugSnapshot) -> None:
-        tile_overlay = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-
         if ai_debug.reach_map is not None:
             for y in range(BOARD_HEIGHT_TILES):
                 for x in range(BOARD_WIDTH_TILES):
                     val = float(ai_debug.reach_map[y, x])
                     if val > 0.05:
                         alpha = int(min(130, val * 115))
-                        tile_overlay.fill((40, 220, 90, alpha))
+                        tile_overlay = self._get_debug_tile_overlay(alpha)
                         px = self.offset_x + x * TILE_SIZE
                         py = self.offset_y + y * TILE_SIZE
                         surface.blit(tile_overlay, (px, py))
@@ -166,11 +265,9 @@ class BoardRenderer:
     def _draw_game_over_overlay(self, surface: pygame.Surface, snapshot: GameSnapshot) -> None:
         board_w = BOARD_WIDTH_TILES * TILE_SIZE
         board_h = BOARD_HEIGHT_TILES * TILE_SIZE
-        overlay = pygame.Surface((board_w, 140), pygame.SRCALPHA)
-        overlay.fill((15, 18, 24, 215))
 
         cy = board_h // 2 - 70
-        surface.blit(overlay, (self.offset_x, cy))
+        surface.blit(self._game_over_overlay, (self.offset_x, cy))
         pygame.draw.rect(surface, (255, 210, 60), (self.offset_x, cy, board_w, 140), 3)
 
         winner_id = snapshot.winner_id
@@ -183,8 +280,12 @@ class BoardRenderer:
             title_text = f"{label} WINS!"
             title_color = (255, 215, 60)
 
-        t_surf = self.font_banner.render(title_text, True, title_color)
-        s_surf = self.font_sub.render("Press [R] to Play Again  |  [A] Toggle AI", True, (220, 225, 235))
+        t_surf = self._render_text_cached(self.font_banner, title_text, title_color)
+        s_surf = self._render_text_cached(
+            self.font_sub,
+            "Press [R] Play Again  |  [M] Main Menu  |  [T] Toggle AI",
+            (220, 225, 235),
+        )
 
         surface.blit(t_surf, (self.offset_x + board_w // 2 - t_surf.get_width() // 2, cy + 28))
         surface.blit(s_surf, (self.offset_x + board_w // 2 - s_surf.get_width() // 2, cy + 88))
@@ -192,12 +293,14 @@ class BoardRenderer:
     def _draw_pause_overlay(self, surface: pygame.Surface) -> None:
         board_w = BOARD_WIDTH_TILES * TILE_SIZE
         board_h = BOARD_HEIGHT_TILES * TILE_SIZE
-        overlay = pygame.Surface((board_w, 100), pygame.SRCALPHA)
-        overlay.fill((15, 18, 24, 195))
 
         cy = board_h // 2 - 50
-        surface.blit(overlay, (self.offset_x, cy))
-        t_surf = self.font_banner.render("PAUSED", True, (255, 210, 60))
-        s_surf = self.font_sub.render("Press [P] to Resume  |  [N] Step Frame", True, (220, 225, 235))
+        surface.blit(self._pause_overlay, (self.offset_x, cy))
+        t_surf = self._render_text_cached(self.font_banner, "PAUSED", (255, 210, 60))
+        s_surf = self._render_text_cached(
+            self.font_sub,
+            "Press [P] Resume  |  [N] Step  |  [M] Main Menu",
+            (220, 225, 235),
+        )
         surface.blit(t_surf, (self.offset_x + board_w // 2 - t_surf.get_width() // 2, cy + 16))
         surface.blit(s_surf, (self.offset_x + board_w // 2 - s_surf.get_width() // 2, cy + 62))

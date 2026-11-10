@@ -46,7 +46,7 @@ void ClassicLevel::generate(World& world) {
             }
             if (std::rand() % 100 < m_wallDensityPercent) {
                 if (!isSafeZone(x, y)) {
-                    world.addEntity(std::make_unique<BreakableWall>(x, y));
+                    board.setCellType(x, y, CellType::BREAKABLE_WALL);
                 }
             }
         }

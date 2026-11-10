@@ -19,6 +19,23 @@ class AssetManager:
         pygame.font.init()
         self._generate_procedural_assets()
         self._load_external_overrides()
+        self._generate_dimmed_player_icons()
+
+    @staticmethod
+    def _optimize_surface(surf: pygame.Surface, has_alpha: bool = True) -> pygame.Surface:
+        """Converts surface to the active display format for fast hardware/software blitting."""
+        if pygame.display.get_surface() is not None:
+            return surf.convert_alpha() if has_alpha else surf.convert()
+        return surf
+
+    def _generate_dimmed_player_icons(self) -> None:
+        for pid in self.player_colors:
+            icon = self.surfaces.get(f"player_{pid}")
+            if icon is not None:
+                dim_icon = pygame.Surface(icon.get_size(), pygame.SRCALPHA)
+                dim_icon.blit(icon, (0, 0))
+                dim_icon.fill((90, 90, 90, 160), special_flags=pygame.BLEND_RGBA_MULT)
+                self.surfaces[f"player_{pid}_dim"] = self._optimize_surface(dim_icon, has_alpha=True)
 
     def _load_external_overrides(self) -> None:
         if not self.assets_dir.exists() or not self.assets_dir.is_dir():
@@ -27,10 +44,10 @@ class AssetManager:
             key = png_file.stem
             try:
                 loaded = pygame.image.load(str(png_file))
-                if pygame.display.get_surface() is not None:
-                    loaded = loaded.convert_alpha()
-                scaled = pygame.transform.smoothscale(loaded, (TILE_SIZE, TILE_SIZE))
-                self.surfaces[key] = scaled
+                scaled = pygame.transform.scale(loaded, (TILE_SIZE, TILE_SIZE))
+                has_alpha = key not in ("floor", "solid")
+                self.surfaces[key] = self._optimize_surface(scaled, has_alpha=has_alpha)
+                print(f"Loaded external asset: {key}")
             except Exception:
                 continue
 
@@ -40,7 +57,7 @@ class AssetManager:
         floor.fill((45, 42, 42))
         pygame.draw.rect(floor, (52, 49, 49), (1, 1, TILE_SIZE - 2, TILE_SIZE - 2), 1)
         pygame.draw.rect(floor, (33, 30, 30), (0, 0, TILE_SIZE, TILE_SIZE), 1)
-        self.surfaces["floor"] = floor
+        self.surfaces["floor"] = self._optimize_surface(floor, has_alpha=False)
 
         # 2. Solid Wall (Khaki/Sandstone beveled pillar matching original game)
         solid = pygame.Surface((TILE_SIZE, TILE_SIZE))
@@ -56,7 +73,7 @@ class AssetManager:
             [(TILE_SIZE, 0), (TILE_SIZE, TILE_SIZE), (0, TILE_SIZE), (6, TILE_SIZE - 6), (TILE_SIZE - 6, TILE_SIZE - 6), (TILE_SIZE - 6, 6)],
         )
         pygame.draw.rect(solid, (105, 90, 58), (0, 0, TILE_SIZE, TILE_SIZE), 2)
-        self.surfaces["solid"] = solid
+        self.surfaces["solid"] = self._optimize_surface(solid, has_alpha=False)
 
         # 3. Breakable Wall (Classic wooden/reddish barrel with metal bands)
         breakable = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
@@ -67,7 +84,7 @@ class AssetManager:
         pygame.draw.rect(breakable, (85, 85, 95), (4, TILE_SIZE // 3 - 2, TILE_SIZE - 8, 5))
         pygame.draw.rect(breakable, (85, 85, 95), (4, (2 * TILE_SIZE) // 3 - 2, TILE_SIZE - 8, 5))
         pygame.draw.rect(breakable, (95, 48, 42), barrel_rect, 2, border_radius=8)
-        self.surfaces["breakable"] = breakable
+        self.surfaces["breakable"] = self._optimize_surface(breakable, has_alpha=True)
 
         # 4. Power-up Badges
         font = pygame.font.SysFont(None, 32, bold=True)
@@ -86,7 +103,7 @@ class AssetManager:
             text_surf = font.render(text, True, color)
             text_rect = text_surf.get_rect(center=(TILE_SIZE // 2, TILE_SIZE // 2))
             surf.blit(text_surf, text_rect)
-            self.surfaces[f"powerup_{key}"] = surf
+            self.surfaces[f"powerup_{key}"] = self._optimize_surface(surf, has_alpha=True)
 
         # 5. Players (Directional + Walking frames), Bombs (Pulsing), and Plasma Flames
         directions = {
@@ -99,18 +116,22 @@ class AssetManager:
         for pid, color in self.player_colors.items():
             for dir_name, (dx, dy) in directions.items():
                 for frame in (0, 1):
-                    psurf = self._create_player_sprite(color, dx, dy, frame)
+                    psurf = self._optimize_surface(
+                        self._create_player_sprite(color, dx, dy, frame), has_alpha=True
+                    )
                     self.surfaces[f"player_{pid}_{dir_name}_{frame}"] = psurf
                 self.surfaces[f"player_{pid}_{dir_name}"] = self.surfaces[f"player_{pid}_{dir_name}_0"]
 
             self.surfaces[f"player_{pid}"] = self.surfaces[f"player_{pid}_down_0"]
 
             for phase in range(3):
-                bsurf = self._create_bomb_sprite(color, phase)
+                bsurf = self._optimize_surface(
+                    self._create_bomb_sprite(color, phase), has_alpha=True
+                )
                 self.surfaces[f"bomb_{pid}_{phase}"] = bsurf
             self.surfaces[f"bomb_{pid}"] = self.surfaces[f"bomb_{pid}_0"]
 
-            fsurf = self._create_flame_sprite(color)
+            fsurf = self._optimize_surface(self._create_flame_sprite(color), has_alpha=True)
             self.surfaces[f"flame_{pid}"] = fsurf
 
     def _create_player_sprite(

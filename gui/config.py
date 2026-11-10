@@ -52,3 +52,9 @@ PLAYER_NAMES: Dict[int, str] = {
     3: "Player 3",
     4: "Player 4",
 }
+
+LEVEL_PRESETS: Dict[int, Tuple[str, int, str]] = {
+    1: ("Classic Arena", 65, "Balanced destructible barrels & classic pillars"),
+    2: ("Open Battleground", 35, "Open sightlines ideal for kicking bombs"),
+    3: ("Dense Labyrinth", 80, "Tight maze packed with hidden power-ups"),
+}

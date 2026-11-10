@@ -1,11 +1,46 @@
-from collections import deque
+import os
+from typing import Any, Dict, List, Optional, Tuple
 import gymnasium as gym
 import numpy as np
 import torch as th
 import torch.nn as nn
 from gymnasium import spaces
+from stable_baselines3 import PPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 import bomberman_engine as bme
+from rl_utils import (
+    DIRS,
+    apply_tactical_shield,
+    choose_bfs_fallback_action,
+    compute_bfs_features,
+    format_obs,
+)
+
+# Process-global singleton cache for frozen Self-Play PPO opponent models (saves RAM across DummyVecEnv)
+_SHARED_OPPONENT_MODELS: Dict[str, Tuple[float, Any, int]] = {}
+
+
+def _get_shared_opponent_model(model_path: Optional[str]) -> Tuple[Optional[Any], int]:
+    """Loads and caches a frozen PPO checkpoint once per process, reloading only if file mtime changes."""
+    if not model_path or not os.path.exists(model_path):
+        return None, 12
+    try:
+        mtime = os.path.getmtime(model_path)
+        cached = _SHARED_OPPONENT_MODELS.get(model_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1], cached[2]
+        model = PPO.load(
+            model_path,
+            device="cpu",
+            custom_objects={"BombermanCNN": BombermanCNN},
+        )
+        model.policy.set_training_mode(False)
+        obs_shape = getattr(model.observation_space, "shape", (12, 13, 13))
+        expected_channels = int(obs_shape[0]) if obs_shape else 12
+        _SHARED_OPPONENT_MODELS[model_path] = (mtime, model, expected_channels)
+        return model, expected_channels
+    except Exception:
+        return None, 12
 
 
 class BombermanCNN(BaseFeaturesExtractor):
@@ -35,22 +70,30 @@ class BombermanEnv(gym.Env):
         board_width=13,
         board_height=13,
         max_steps=900,
-        frame_skip=4,
+        frame_skip=6,
         num_bots=3,
         wall_density=65,
         tactical_shield=True,
         use_10_channels=False,
+        randomize_curriculum=False,
+        sudden_death_ticks=None,
+        num_ai_opponents=0,
+        self_play_model_path=None,
     ):
         super().__init__()
         self.width = board_width
         self.height = board_height
         self.num_bots = num_bots
+        self.num_ai_opponents = num_ai_opponents
+        self.self_play_model_path = self_play_model_path
         self.wall_density = wall_density
         self.player_id = 1
         self.max_steps = max_steps
         self.frame_skip = frame_skip
         self.tactical_shield = tactical_shield
         self.use_10_channels = use_10_channels
+        self.randomize_curriculum = randomize_curriculum
+        self.sudden_death_ticks = sudden_death_ticks
 
         self.game = bme.Game(self.width, self.height)
         self.action_space = spaces.Discrete(6)
@@ -70,222 +113,87 @@ class BombermanEnv(gym.Env):
         self.current_step = 0
         self.idle_streak = 0
         self.visited_tiles = set()
+        self._active_ai_opponent_ids: List[int] = []
+        self._cached_obs = None
+        self._cached_potential = 0.0
+        self._cached_analysis = None
 
     def _compute_bfs_features(self, base_obs):
-        h, w = self.height, self.width
-        reach_map = np.zeros((h, w), dtype=np.float32)
-        bomb_map = np.zeros((h, w), dtype=np.float32)
-
         pinfo = self.game.getPlayerInfo(self.player_id)
-        if not pinfo.isAlive:
-            return reach_map, bomb_map, 0.0, {
-                "safe_escape_from_here": False,
-                "bomb_targets_here": 0,
-                "in_danger": False,
-                "escape_action": 0,
-                "valid_moves": [0],
-                "can_place_bomb": False,
-                "can_push_bomb_now": False,
-            }
-
-        px, py = int(pinfo.x), int(pinfo.y)
-        solid = base_obs[0] > 0.0
-        breakable = base_obs[1] > 0.0
-        bombs = base_obs[2] > 0.0
-        danger = base_obs[3]
-        flames = base_obs[4] > 0.0
-        powerups = base_obs[5] > 0.0
-        enemies = base_obs[7] > 0.0
-
-        has_ring = bool(pinfo.hasRing)
-        has_hammer = bool(pinfo.hasHammer)
-        bomb_radius = int(pinfo.bombRadius)
-        avail_bombs = int(pinfo.availBombs)
-        facing_dx, facing_dy = int(pinfo.facingDx), int(pinfo.facingDy)
-
-        in_danger = bool(danger[py, px] > 0.0)
-
-        # RING MECHANIC: Only Ring allows walking through bombs!
-        passable = ~(solid | breakable | flames) if has_ring else ~(solid | breakable | bombs | flames)
-
-        dist = np.full((h, w), -1, dtype=np.int32)
-        first_action = np.zeros((h, w), dtype=np.int32)
-        q = deque([(px, py)])
-        dist[py, px] = 0
-        reach_map[py, px] = 1.0 if danger[py, px] == 0.0 else 0.2
-
-        valid_moves = [0]
-        escape_action = 0
-        min_safe_dist = 999
-
-        while q:
-            cx, cy = q.popleft()
-            d = dist[cy, cx]
-            if d >= 14:
-                continue
-            for act_id, (dx, dy) in self.DIRS.items():
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < w and 0 <= ny < h and dist[ny, nx] == -1 and passable[ny, nx]:
-                    if not in_danger and danger[ny, nx] > 0.0:
-                        continue
-                    if in_danger and danger[ny, nx] >= 0.88:
-                        continue
-                    dist[ny, nx] = d + 1
-                    fa = act_id if d == 0 else first_action[cy, cx]
-                    first_action[ny, nx] = fa
-                    if d == 0:
-                        valid_moves.append(act_id)
-                    if danger[ny, nx] == 0.0:
-                        reach_map[ny, nx] = max(0.1, 1.0 - (d + 1) / 15.0)
-                        if d + 1 < min_safe_dist:
-                            min_safe_dist = d + 1
-                            escape_action = fa
-                    else:
-                        reach_map[ny, nx] = 0.15
-                    q.append((nx, ny))
-
-        # HAMMER MECHANIC: Check if an adjacent bomb can be pushed into a free tile
-        def can_push_bomb_in_dir(dx, dy):
-            if not has_hammer or (dx == 0 and dy == 0) or bombs[py, px]:
-                return False
-            bx, by = px + dx, py + dy
-            dest_x, dest_y = bx + dx, by + dy
-            if not (0 <= bx < w and 0 <= by < h and 0 <= dest_x < w and 0 <= dest_y < h):
-                return False
-            if not bombs[by, bx]:
-                return False
-            if solid[dest_y, dest_x] or breakable[dest_y, dest_x] or bombs[dest_y, dest_x] or flames[dest_y, dest_x] or enemies[dest_y, dest_x]:
-                return False
-            return True
-
-        can_push_bomb_now = can_push_bomb_in_dir(facing_dx, facing_dy)
-
-        if has_hammer and not bombs[py, px]:
-            for act_id, (dx, dy) in self.DIRS.items():
-                if can_push_bomb_in_dir(dx, dy) and (dx != facing_dx or dy != facing_dy):
-                    if act_id not in valid_moves:
-                        valid_moves.append(act_id)
-
-        def compute_blast_zone(bx, by, radius):
-            blast = {(bx, by)}
-            for _, (dx, dy) in self.DIRS.items():
-                for r in range(1, radius + 1):
-                    nx, ny = bx + dx * r, by + dy * r
-                    if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx]:
-                        break
-                    blast.add((nx, ny))
-                    if breakable[ny, nx] or bombs[ny, nx]:
-                        break
-            return blast
-
-        def has_escape_if_bomb_at(bx, by, radius):
-            blast_tiles = compute_blast_zone(bx, by, radius)
-            max_search_steps = max(6, radius + 3)
-            b_dist = np.full((h, w), -1, dtype=np.int32)
-            bq = deque([(bx, by)])
-            b_dist[by, bx] = 0
-            while bq:
-                cx, cy = bq.popleft()
-                cd = b_dist[cy, cx]
-                if cd >= max_search_steps:
-                    continue
-                for _, (dx, dy) in self.DIRS.items():
-                    nx, ny = cx + dx, cy + dy
-                    if 0 <= nx < w and 0 <= ny < h and b_dist[ny, nx] == -1 and passable[ny, nx] and danger[ny, nx] < 0.7:
-                        b_dist[ny, nx] = cd + 1
-                        if (nx, ny) not in blast_tiles and danger[ny, nx] == 0.0:
-                            return True
-                        bq.append((nx, ny))
-            return False
-
-        def count_targets_at(bx, by, radius):
-            t = 0
-            for _, (dx, dy) in self.DIRS.items():
-                for r in range(1, radius + 1):
-                    nx, ny = bx + dx * r, by + dy * r
-                    if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx]:
-                        break
-                    if enemies[ny, nx]:
-                        t += 3
-                    if breakable[ny, nx]:
-                        t += 1
-                        break
-            return t
-
-        can_place_bomb = (avail_bombs > 0) and (not bombs[py, px])
-        safe_escape_here = can_place_bomb and has_escape_if_bomb_at(px, py, bomb_radius)
-        targets_here = count_targets_at(px, py, bomb_radius) if safe_escape_here else 0
-        if safe_escape_here and targets_here > 0:
-            bomb_map[py, px] = min(1.0, targets_here / 4.0)
-        elif can_push_bomb_now:
-            bomb_map[py, px] = 1.0
-
-        for act_id, (dx, dy) in self.DIRS.items():
-            nx, ny = px + dx, py + dy
-            if 0 <= nx < w and 0 <= ny < h and passable[ny, nx] and danger[ny, nx] == 0.0:
-                if has_escape_if_bomb_at(nx, ny, bomb_radius):
-                    t = count_targets_at(nx, ny, bomb_radius)
-                    if t > 0:
-                        bomb_map[ny, nx] = min(1.0, t / 4.0)
-
-        safe_reachable_count = int(np.sum((dist >= 0) & (danger == 0.0)))
-        phi_space = min(safe_reachable_count, 35) * 0.12
-        phi_safety = -4.0 * float(danger[py, px]) if in_danger else 0.0
-        phi_hunt = 0.0
-        if not in_danger:
-            pu_ys, pu_xs = np.where((powerups) & (dist >= 0))
-            if len(pu_xs) > 0:
-                phi_hunt += (15.0 - min(int(np.min(dist[pu_ys, pu_xs])), 15)) * 0.15
-            en_ys, en_xs = np.where(enemies)
-            if len(en_xs) > 0:
-                phi_hunt += (24.0 - min(int(np.min(np.abs(en_xs - px) + np.abs(en_ys - py))), 24)) * 0.06
-
-        analysis = {
-            "pos": (px, py),
-            "safe_escape_from_here": safe_escape_here,
-            "bomb_targets_here": targets_here,
-            "in_danger": in_danger,
-            "escape_action": escape_action,
-            "valid_moves": valid_moves,
-            "can_place_bomb": can_place_bomb,
-            "can_push_bomb_now": can_push_bomb_now,
-        }
-        return reach_map, bomb_map, phi_space + phi_safety + phi_hunt, analysis
+        return compute_bfs_features(base_obs, pinfo, self.width, self.height)
 
     def _format_obs(self, base_obs, reach_map, bomb_map):
-        if self.use_10_channels:
-            return np.concatenate([base_obs[:8], reach_map[None, ...], bomb_map[None, ...]], axis=0)
-        return np.concatenate([base_obs, reach_map[None, ...], bomb_map[None, ...]], axis=0)
+        return format_obs(base_obs, reach_map, bomb_map, expected_channels=self.n_channels)
+
+    def _get_ai_opponent_commands(self) -> List[bme.PlayerCommand]:
+        """Computes frozen Self-Play PPO + Tactical Shield commands for active AI opponent slots."""
+        if not self._active_ai_opponent_ids:
+            return []
+        opp_model, opp_channels = _get_shared_opponent_model(self.self_play_model_path)
+        cmds: List[bme.PlayerCommand] = []
+        for opp_id in self._active_ai_opponent_ids:
+            opp_info = self.game.getPlayerInfo(opp_id)
+            if not opp_info.isAlive:
+                continue
+            opp_base = np.asarray(self.game.getState(opp_id), dtype=np.float32).reshape(
+                10, self.height, self.width
+            )
+            opp_reach, opp_bomb, _, opp_analysis = compute_bfs_features(
+                opp_base, opp_info, self.width, self.height
+            )
+            if opp_model is not None:
+                opp_obs = format_obs(
+                    opp_base, opp_reach, opp_bomb, expected_channels=opp_channels
+                )
+                with th.no_grad():
+                    raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
+                exec_act, _ = apply_tactical_shield(
+                    int(raw_act), opp_analysis, rng=self.np_random
+                )
+            else:
+                exec_act = choose_bfs_fallback_action(opp_analysis, rng=self.np_random)
+            if exec_act != 0:
+                cmds.append(bme.PlayerCommand(opp_id, self.action_mapping[exec_act]))
+        return cmds
 
     def step(self, action):
         self.current_step += 1
         raw_action = int(action)
 
-        state = self.game.getState(self.player_id)
-        base_obs = np.array(state, dtype=np.float32).reshape(10, self.height, self.width)
-        _, _, prev_potential, analysis = self._compute_bfs_features(base_obs)
+        if self._cached_analysis is None:
+            base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
+                10, self.height, self.width
+            )
+            _, _, prev_potential, analysis = self._compute_bfs_features(base_obs)
+        else:
+            prev_potential = self._cached_potential
+            analysis = self._cached_analysis
 
         exec_action = raw_action
+        shield_intervened = False
         if self.tactical_shield:
-            if analysis["in_danger"] and analysis["escape_action"] != 0 and (
-                exec_action == 0 or (exec_action == 5 and not analysis["can_push_bomb_now"]) or exec_action not in analysis["valid_moves"]
-            ):
-                exec_action = int(analysis["escape_action"])
-            elif exec_action == 5 and not analysis["can_push_bomb_now"] and (
-                not analysis["can_place_bomb"] or not analysis["safe_escape_from_here"] or analysis["bomb_targets_here"] == 0
-            ):
-                nz = [m for m in analysis["valid_moves"] if m != 0]
-                exec_action = int(np.random.choice(nz)) if nz else 0
-            elif exec_action in (1, 2, 3, 4) and exec_action not in analysis["valid_moves"]:
-                nz = [m for m in analysis["valid_moves"] if m != 0]
-                exec_action = int(np.random.choice(nz)) if nz else 0
+            exec_action, shield_intervened = apply_tactical_shield(
+                raw_action, analysis, rng=self.np_random
+            )
+            if shield_intervened:
+                self.ep_stats["shield_interventions"] += 1
 
         cpp_command = self.action_mapping[exec_action]
         total_reward, moved_any, bomb_placed_any, bomb_pushed_any, won, died = 0.0, False, False, False, False, False
+        if shield_intervened:
+            if analysis["in_danger"] or raw_action == 5:
+                total_reward -= 0.20
+            else:
+                total_reward -= 0.08
+        ticks_executed = 0
+
+        extra_cmds = self._get_ai_opponent_commands() if self._active_ai_opponent_ids else []
 
         for tick_idx in range(self.frame_skip):
             cmd = cpp_command if tick_idx == 0 else bme.Command.NONE
-            res = self.game.step(self.player_id, cmd)
+            tick_extra = extra_cmds if tick_idx == 0 else []
+            res = self.game.step(self.player_id, cmd, tick_extra)
+            ticks_executed += 1
             total_reward += float(res.reward)
             moved_any |= res.moved
             bomb_placed_any |= res.bombPlaced
@@ -293,21 +201,42 @@ class BombermanEnv(gym.Env):
             won |= res.won
             died |= res.died
             self.ep_stats["walls_destroyed"] += res.wallsDestroyed
+            self.ep_stats["enemies_hit"] += res.enemiesHit
             self.ep_stats["kills"] += res.enemiesKilled
             self.ep_stats["powerups"] += res.powerUpsCollected
             self.ep_stats["lives_lost"] += res.livesLost
             if res.isDone:
                 break
 
-        new_state = self.game.getState(self.player_id)
-        new_base_obs = np.array(new_state, dtype=np.float32).reshape(10, self.height, self.width)
+            pinfo = self.game.getPlayerInfo(self.player_id)
+            if not pinfo.isAlive:
+                break
+
+            if tick_idx == 0 and (res.bombPlaced or res.bombPushed):
+                if pinfo.cooldown <= 1:
+                    break
+            elif moved_any:
+                if pinfo.cooldown <= 1:
+                    break
+            else:
+                if ticks_executed >= min(self.frame_skip, 4):
+                    break
+
+        self.ep_stats["ticks"] += ticks_executed
+
+        new_base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
+            10, self.height, self.width
+        )
         reach_map, bomb_map, new_potential, post_analysis = self._compute_bfs_features(new_base_obs)
         obs = self._format_obs(new_base_obs, reach_map, bomb_map)
+        self._cached_obs = obs
+        self._cached_potential = new_potential
+        self._cached_analysis = post_analysis
 
         self.ep_stats["steps"] += 1
         if raw_action == 0:
             self.ep_stats["idle_actions"] += 1
-        if raw_action in (1, 2, 3, 4) and not moved_any:
+        if raw_action in (1, 2, 3, 4) and not moved_any and not bomb_pushed_any:
             self.ep_stats["wall_bumps"] += 1
         if moved_any:
             self.ep_stats["moves"] += 1
@@ -317,20 +246,44 @@ class BombermanEnv(gym.Env):
             self.ep_stats["bombs_placed"] += 1
             if analysis["safe_escape_from_here"] and analysis["bomb_targets_here"] > 0:
                 self.ep_stats["tactical_bombs"] += 1
-                total_reward += 1.5
+                enemy_t = int(analysis.get("enemy_targets_here", 0))
+                compressed_t = int(analysis.get("enemy_space_compressed_here", 0))
+                trap_here = bool(analysis.get("trap_bomb_here", False))
+                total_reward += 0.35 + (1.0 * enemy_t) + (0.25 * min(compressed_t, 6))
+                if trap_here:
+                    self.ep_stats["traps_created"] += 1
+                    total_reward += 2.50
             else:
-                total_reward -= 0.5
+                total_reward -= 0.45
         if bomb_pushed_any:
             self.ep_stats["bombs_pushed"] += 1
-            total_reward += 1.5
+            prev_en_safe = int(analysis.get("total_enemy_safe_tiles", 0))
+            post_en_safe = int(post_analysis.get("total_enemy_safe_tiles", 0))
+            push_compressed = max(0, prev_en_safe - post_en_safe)
+            newly_trapped = (
+                int(post_analysis.get("trapped_enemies_count", 0))
+                > int(analysis.get("trapped_enemies_count", 0))
+            )
+            if (
+                exec_action in analysis.get("tactical_push_actions", [])
+                or analysis["in_danger"]
+                or push_compressed > 0
+                or newly_trapped
+            ):
+                total_reward += 0.8 + (0.25 * min(push_compressed, 6))
+                if newly_trapped:
+                    self.ep_stats["traps_created"] += 1
+                    total_reward += 2.50
+            else:
+                total_reward -= 0.1
         if analysis["in_danger"] and not post_analysis["in_danger"] and not died:
             self.ep_stats["successful_dodges"] += 1
 
         terminated = won or died or res.isDone
         if not terminated:
-            total_reward += float(np.clip(0.99 * new_potential - prev_potential, -3.0, 3.0))
-            if raw_action in (1, 2, 3, 4) and raw_action not in analysis["valid_moves"]:
-                total_reward -= 0.25
+            total_reward += float(np.clip(0.3 * (0.99 * new_potential - prev_potential), -1.0, 1.0))
+            if not self.tactical_shield and raw_action in (1, 2, 3, 4) and raw_action not in analysis["valid_moves"]:
+                total_reward -= 0.15
             if not moved_any and not bomb_placed_any and not bomb_pushed_any and not analysis["in_danger"]:
                 self.idle_streak += 1
                 if self.idle_streak > 2:
@@ -339,6 +292,8 @@ class BombermanEnv(gym.Env):
                 self.idle_streak = 0
 
         truncated = bool(self.current_step >= self.max_steps and not terminated)
+        if truncated and not won:
+            total_reward -= 15.0
         info = {}
         if terminated or truncated:
             self.ep_stats["unique_tiles"] = len(self.visited_tiles)
@@ -358,6 +313,7 @@ class BombermanEnv(gym.Env):
         self.visited_tiles = set()
         self.ep_stats = {
             "steps": 0,
+            "ticks": 0,
             "moves": 0,
             "idle_actions": 0,
             "wall_bumps": 0,
@@ -365,19 +321,57 @@ class BombermanEnv(gym.Env):
             "bombs_pushed": 0,
             "tactical_bombs": 0,
             "walls_destroyed": 0,
+            "enemies_hit": 0,
             "kills": 0,
             "powerups": 0,
             "lives_lost": 0,
             "successful_dodges": 0,
+            "shield_interventions": 0,
+            "traps_created": 0,
             "unique_tiles": 1,
             "won": 0.0,
             "survived": 1.0,
         }
-        self.game.reset(bme.ClassicLevel(1 + self.num_bots, self.width, self.height, self.wall_density), 1, self.num_bots)
+        active_bots = self.num_bots
+        active_ai_opps = self.num_ai_opponents
+        active_density = self.wall_density
+        if self.randomize_curriculum:
+            active_bots = int(self.np_random.choice([1, 2, 3], p=[0.25, 0.35, 0.40]))
+            active_density = int(self.np_random.choice([35, 50, 65, 75], p=[0.20, 0.30, 0.35, 0.15]))
+            if self.self_play_model_path or self.num_ai_opponents > 0:
+                max_ai = min(2, active_bots)
+                active_ai_opps = int(self.np_random.integers(0, max_ai + 1))
 
-        state = self.game.getState(self.player_id)
-        base_obs = np.array(state, dtype=np.float32).reshape(10, self.height, self.width)
-        reach_map, bomb_map, _, analysis = self._compute_bfs_features(base_obs)
+        active_ai_opps = max(0, min(active_ai_opps, active_bots))
+        active_dumb_bots = max(0, active_bots - active_ai_opps)
+        self._active_ai_opponent_ids = list(range(2, 2 + active_ai_opps))
+
+        self.game.reset(
+            bme.ClassicLevel(1 + active_bots, self.width, self.height, active_density),
+            1 + active_ai_opps,
+            active_dumb_bots,
+        )
+
+        if self.sudden_death_ticks is not None:
+            self.game.setSuddenDeathTimer(int(self.sudden_death_ticks))
+        elif self.randomize_curriculum:
+            roll = float(self.np_random.random())
+            if roll < 0.20:
+                self.game.setSuddenDeathTimer(int(self.np_random.integers(240, 900)))
+            if float(self.np_random.random()) < 0.25:
+                pu_choice = str(self.np_random.choice(["H", "R", "S", "B", "L"]))
+                self.game.givePlayerPowerUp(self.player_id, pu_choice)
+                if float(self.np_random.random()) < 0.35:
+                    self.game.givePlayerPowerUp(self.player_id, "H")
+
+        base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
+            10, self.height, self.width
+        )
+        reach_map, bomb_map, potential, analysis = self._compute_bfs_features(base_obs)
         if analysis.get("pos"):
             self.visited_tiles.add(analysis["pos"])
-        return self._format_obs(base_obs, reach_map, bomb_map), {}
+        obs = self._format_obs(base_obs, reach_map, bomb_map)
+        self._cached_obs = obs
+        self._cached_potential = potential
+        self._cached_analysis = analysis
+        return obs, {}

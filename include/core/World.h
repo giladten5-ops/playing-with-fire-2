@@ -14,6 +14,7 @@ private:
     std::vector<std::unique_ptr<Entity>> m_spawnQueue;
     std::unordered_map<int, int> m_wallsDestroyedByOwner;
     std::unordered_map<int, int> m_enemiesKilledByOwner;
+    std::unordered_map<int, int> m_enemiesHitByOwner;
 
 public:
     World(int width, int height);
@@ -41,4 +42,7 @@ public:
 
     void recordEnemyKilled(int ownerId);
     int popEnemiesKilled(int ownerId);
+
+    void recordEnemyHit(int ownerId);
+    int popEnemiesHit(int ownerId);
 };

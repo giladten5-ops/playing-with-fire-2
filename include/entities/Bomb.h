@@ -6,7 +6,7 @@ class World;
 
 class Bomb : public Entity, public IPushable {
 public:
-    static constexpr int SLIDE_COOLDOWN_FRAMES = 2;
+    static constexpr int SLIDE_COOLDOWN_FRAMES = 3;
 
 private:
     int m_timer;

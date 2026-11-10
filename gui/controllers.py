@@ -1,4 +1,3 @@
-from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol, Tuple
 import numpy as np
@@ -6,6 +5,7 @@ import pygame
 
 from gui.config import BOARD_HEIGHT_TILES, BOARD_WIDTH_TILES, DEFAULT_MODEL_PATHS
 from gui.state_snapshot import AIDebugSnapshot, IGameSession, PlayerAction
+from rl_utils import DIRS, apply_tactical_shield, compute_bfs_features, format_obs
 
 
 class IPlayerController(Protocol):
@@ -14,32 +14,228 @@ class IPlayerController(Protocol):
     def get_action(self, session: Optional[IGameSession] = None) -> PlayerAction:
         ...
 
+    def get_command(self, session: Optional[IGameSession] = None) -> PlayerAction:
+        ...
+
     def get_debug_snapshot(self) -> Optional[AIDebugSnapshot]:
         ...
 
 
 class KeyboardController:
-    """Reads human keyboard state and maps it to pure Python PlayerAction values."""
+    """
+    Reads Player 1 keyboard state (Arrow keys to move, Space to place bomb).
+    Combines event-driven tracking (KEYDOWN/KEYUP with physical scancodes and bomb latching)
+    and pygame.key.get_pressed() polling so neither quick taps nor held keys are missed.
+    """
+
+    _DIR_BINDINGS: Tuple[Tuple[PlayerAction, Tuple[int, ...], int], ...] = (
+        (PlayerAction.UP, (pygame.K_UP,), getattr(pygame, "KSCAN_UP", 82)),
+        (PlayerAction.DOWN, (pygame.K_DOWN,), getattr(pygame, "KSCAN_DOWN", 81)),
+        (PlayerAction.LEFT, (pygame.K_LEFT,), getattr(pygame, "KSCAN_LEFT", 80)),
+        (PlayerAction.RIGHT, (pygame.K_RIGHT,), getattr(pygame, "KSCAN_RIGHT", 79)),
+    )
+    _BOMB_KEYS: Tuple[int, ...] = (pygame.K_SPACE,)
+    _BOMB_SCANCODES: Tuple[int, ...] = (getattr(pygame, "KSCAN_SPACE", 44),)
 
     def __init__(self) -> None:
-        pass
+        self._held_dirs: List[PlayerAction] = []
+        self._held_bomb: bool = False
+        self._bomb_latched: bool = False
+
+    def reset_state(self) -> None:
+        self._held_dirs.clear()
+        self._held_bomb = False
+        self._bomb_latched = False
+
+    @classmethod
+    def _match_action(cls, event: pygame.event.Event) -> Optional[PlayerAction]:
+        ev_key = getattr(event, "key", None)
+        ev_scan = getattr(event, "scancode", None)
+        if ev_key in cls._BOMB_KEYS or (ev_scan is not None and ev_scan in cls._BOMB_SCANCODES):
+            return PlayerAction.PLACE_BOMB
+        for act, key_codes, scan_code in cls._DIR_BINDINGS:
+            if ev_key in key_codes or (ev_scan is not None and scan_code != 0 and ev_scan == scan_code):
+                return act
+        return None
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type not in (pygame.KEYDOWN, pygame.KEYUP):
+            return
+        act = self._match_action(event)
+        if act is None:
+            return
+        if event.type == pygame.KEYDOWN:
+            if act == PlayerAction.PLACE_BOMB:
+                self._held_bomb = True
+                self._bomb_latched = True
+            else:
+                if act in self._held_dirs:
+                    self._held_dirs.remove(act)
+                self._held_dirs.append(act)
+        elif event.type == pygame.KEYUP:
+            if act == PlayerAction.PLACE_BOMB:
+                self._held_bomb = False
+            elif act in self._held_dirs:
+                self._held_dirs.remove(act)
 
     def get_action(self, session: Optional[IGameSession] = None) -> PlayerAction:
         keys = pygame.key.get_pressed()
 
-        if keys[pygame.K_SPACE]:
+        if self._bomb_latched or self._held_bomb or keys[pygame.K_SPACE]:
+            self._bomb_latched = False
             return PlayerAction.PLACE_BOMB
 
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
+        if self._held_dirs:
+            return self._held_dirs[-1]
+
+        if keys[pygame.K_UP]:
             return PlayerAction.UP
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+        if keys[pygame.K_DOWN]:
             return PlayerAction.DOWN
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+        if keys[pygame.K_LEFT]:
             return PlayerAction.LEFT
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+        if keys[pygame.K_RIGHT]:
             return PlayerAction.RIGHT
 
         return PlayerAction.NONE
+
+    def get_command(self, session: Optional[IGameSession] = None) -> PlayerAction:
+        return self.get_action(session)
+
+    def get_debug_snapshot(self) -> Optional[AIDebugSnapshot]:
+        return None
+
+
+class Player2KeyboardController:
+    """
+    Reads Player 2 keyboard state (WASD to move, E or Left Shift to place bomb).
+    Matches physical scancodes, English keycodes, and Hebrew layout keycodes/unicode
+    so Player 2 controls work reliably regardless of active OS keyboard layout.
+    """
+
+    # Physical scancodes: W=26, S=22, A=4, D=7, E=8, LSHIFT=225
+    _DIR_BINDINGS: Tuple[Tuple[PlayerAction, Tuple[int, ...], int, str], ...] = (
+        (
+            PlayerAction.UP,
+            (pygame.K_w, ord("W"), ord("'")),
+            getattr(pygame, "KSCAN_W", 26),
+            "wW'",
+        ),
+        (
+            PlayerAction.DOWN,
+            (pygame.K_s, ord("S"), ord("\u05d3")),
+            getattr(pygame, "KSCAN_S", 22),
+            "sS\u05d3",
+        ),
+        (
+            PlayerAction.LEFT,
+            (pygame.K_a, ord("A"), ord("\u05e9")),
+            getattr(pygame, "KSCAN_A", 4),
+            "aA\u05e9",
+        ),
+        (
+            PlayerAction.RIGHT,
+            (pygame.K_d, ord("D"), ord("\u05d2")),
+            getattr(pygame, "KSCAN_D", 7),
+            "dD\u05d2",
+        ),
+    )
+    _BOMB_KEYS: Tuple[int, ...] = (
+        pygame.K_e,
+        ord("E"),
+        ord("\u05e7"),
+        pygame.K_LSHIFT,
+    )
+    _BOMB_SCANCODES: Tuple[int, ...] = (
+        getattr(pygame, "KSCAN_E", 8),
+        getattr(pygame, "KSCAN_LSHIFT", 225),
+    )
+    _BOMB_CHARS: str = "eE\u05e7"
+
+    def __init__(self) -> None:
+        self._held_dirs: List[PlayerAction] = []
+        self._held_bomb: bool = False
+        self._bomb_latched: bool = False
+
+    def reset_state(self) -> None:
+        self._held_dirs.clear()
+        self._held_bomb = False
+        self._bomb_latched = False
+
+    @classmethod
+    def _match_action(cls, event: pygame.event.Event) -> Optional[PlayerAction]:
+        ev_key = getattr(event, "key", None)
+        ev_scan = getattr(event, "scancode", None)
+        ev_uni = getattr(event, "unicode", "") or ""
+
+        if (
+            ev_key in cls._BOMB_KEYS
+            or (ev_scan is not None and ev_scan in cls._BOMB_SCANCODES)
+            or (ev_uni and ev_uni in cls._BOMB_CHARS)
+        ):
+            return PlayerAction.PLACE_BOMB
+
+        for act, key_codes, scan_code, chars in cls._DIR_BINDINGS:
+            if (
+                ev_key in key_codes
+                or (ev_scan is not None and scan_code != 0 and ev_scan == scan_code)
+                or (ev_uni and ev_uni in chars)
+            ):
+                return act
+        return None
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type not in (pygame.KEYDOWN, pygame.KEYUP):
+            return
+        act = self._match_action(event)
+        if act is None:
+            return
+        if event.type == pygame.KEYDOWN:
+            if act == PlayerAction.PLACE_BOMB:
+                self._held_bomb = True
+                self._bomb_latched = True
+            else:
+                if act in self._held_dirs:
+                    self._held_dirs.remove(act)
+                self._held_dirs.append(act)
+        elif event.type == pygame.KEYUP:
+            if act == PlayerAction.PLACE_BOMB:
+                self._held_bomb = False
+            elif act in self._held_dirs:
+                self._held_dirs.remove(act)
+
+    @staticmethod
+    def _is_any_key_pressed(keys: object, key_codes: Tuple[int, ...]) -> bool:
+        for k in key_codes:
+            try:
+                if keys[k]:  # type: ignore[index]
+                    return True
+            except (IndexError, KeyError, TypeError):
+                continue
+        return False
+
+    def get_action(self, session: Optional[IGameSession] = None) -> PlayerAction:
+        keys = pygame.key.get_pressed()
+
+        if (
+            self._bomb_latched
+            or self._held_bomb
+            or self._is_any_key_pressed(keys, self._BOMB_KEYS)
+        ):
+            self._bomb_latched = False
+            return PlayerAction.PLACE_BOMB
+
+        if self._held_dirs:
+            return self._held_dirs[-1]
+
+        for act, key_codes, _, _ in self._DIR_BINDINGS:
+            if self._is_any_key_pressed(keys, key_codes):
+                return act
+
+        return PlayerAction.NONE
+
+    def get_command(self, session: Optional[IGameSession] = None) -> PlayerAction:
+        return self.get_action(session)
 
     def get_debug_snapshot(self) -> Optional[AIDebugSnapshot]:
         return None
@@ -49,14 +245,15 @@ class PPOAgentController:
     """
     AI Controller that wraps the trained PPO Grandmaster model (or BFS tactical fallback)
     and produces real-time AIDebugSnapshot heatmaps for GUI visualization.
+    Checks for model file existence before importing heavy ML dependencies (PyTorch / SB3),
+    supports lazy loading, and shares the loaded model across all controller instances.
     """
 
-    DIRS: Dict[int, Tuple[int, int]] = {
-        1: (0, -1),
-        2: (0, 1),
-        3: (-1, 0),
-        4: (1, 0),
-    }
+    DIRS: Dict[int, Tuple[int, int]] = DIRS
+
+    _shared_model: Optional[object] = None
+    _shared_expected_channels: int = 12
+    _model_load_attempted: bool = False
 
     def __init__(
         self,
@@ -64,203 +261,129 @@ class PPOAgentController:
         width: int = BOARD_WIDTH_TILES,
         height: int = BOARD_HEIGHT_TILES,
         tactical_shield: bool = True,
+        frame_skip: int = 6,
+        shared_model: Optional[object] = None,
+        expected_channels: int = 12,
+        lazy: bool = False,
     ) -> None:
         self.player_id = player_id
         self.width = width
         self.height = height
         self.tactical_shield = tactical_shield
-        self.model = None
-        self.expected_channels = 12
+        self.frame_skip = max(1, int(frame_skip))
+        self._tick_counter = 0
+        self._idle_cooldown = 0
+        self.model = shared_model
+        self.expected_channels = expected_channels
         self._last_debug: Optional[AIDebugSnapshot] = None
-        self._load_model_if_available()
+        self._last_debug_tick: Optional[int] = None
+        if self.model is None:
+            if PPOAgentController._model_load_attempted:
+                self.model = PPOAgentController._shared_model
+                self.expected_channels = PPOAgentController._shared_expected_channels
+            elif not lazy:
+                self._load_model_if_available()
+
+    @classmethod
+    def reset_model_cache(cls) -> None:
+        """Resets class-level model cache (for testing or explicit reload)."""
+        cls._shared_model = None
+        cls._shared_expected_channels = 12
+        cls._model_load_attempted = False
+
+    @staticmethod
+    def _find_existing_model_path() -> Optional[Path]:
+        for path in DEFAULT_MODEL_PATHS:
+            p = Path(path)
+            if p.is_file():
+                return p
+        return None
+
+    def reset(self) -> None:
+        self._tick_counter = 0
+        self._idle_cooldown = 0
+        self._last_debug = None
+        self._last_debug_tick = None
+
+    def ensure_model_loaded(self) -> None:
+        """Ensures the PPO model load has been attempted once when AI is actually needed."""
+        if self.model is None:
+            self._load_model_if_available()
 
     def _load_model_if_available(self) -> None:
+        if self.model is not None:
+            return
+        if PPOAgentController._model_load_attempted:
+            self.model = PPOAgentController._shared_model
+            self.expected_channels = PPOAgentController._shared_expected_channels
+            return
+
+        PPOAgentController._model_load_attempted = True
+        model_path = self._find_existing_model_path()
+        if model_path is None:
+            self.model = None
+            return
+
         try:
+            if pygame.display.get_init():
+                pygame.event.pump()
+
+            import torch as th
             from stable_baselines3 import PPO
             from bomberman_env import BombermanCNN
 
-            for path in DEFAULT_MODEL_PATHS:
-                if Path(path).exists():
-                    self.model = PPO.load(str(path), custom_objects={"BombermanCNN": BombermanCNN})
-                    obs_shape = getattr(self.model.observation_space, "shape", None)
-                    if obs_shape and len(obs_shape) == 3:
-                        self.expected_channels = int(obs_shape[0])
-                    break
+            if pygame.display.get_init():
+                pygame.event.pump()
+
+            self.model = PPO.load(str(model_path), custom_objects={"BombermanCNN": BombermanCNN})
+            obs_shape = getattr(self.model.observation_space, "shape", None)
+            if obs_shape and len(obs_shape) == 3:
+                self.expected_channels = int(obs_shape[0])
+            # Warm up PyTorch CPU thread pool and conv kernels once
+            dummy_obs = np.zeros(
+                (self.expected_channels, self.height, self.width), dtype=np.float32
+            )
+            with th.no_grad():
+                obs_tensor, _ = self.model.policy.obs_to_tensor(dummy_obs)
+                _ = self.model.policy.get_distribution(obs_tensor)
+                _ = self.model.policy.predict_values(obs_tensor)
+
+            PPOAgentController._shared_model = self.model
+            PPOAgentController._shared_expected_channels = self.expected_channels
+
+            if pygame.display.get_init():
+                pygame.event.pump()
         except Exception:
             self.model = None
+            PPOAgentController._shared_model = None
 
     def _compute_bfs_features(
         self, base_obs: np.ndarray, tstate: Dict[str, int]
     ) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
-        h, w = self.height, self.width
-        reach_map = np.zeros((h, w), dtype=np.float32)
-        bomb_map = np.zeros((h, w), dtype=np.float32)
-
-        if not tstate.get("is_alive", 0):
-            return reach_map, bomb_map, {
-                "safe_escape_from_here": False,
-                "bomb_targets_here": 0,
-                "in_danger": False,
-                "escape_action": 0,
-                "valid_moves": [0],
-                "can_place_bomb": False,
-                "can_push_bomb_now": False,
-            }
-
-        px, py = int(tstate["x"]), int(tstate["y"])
-        solid = base_obs[0] > 0.0
-        breakable = base_obs[1] > 0.0
-        bombs = base_obs[2] > 0.0
-        danger = base_obs[3]
-        flames = base_obs[4] > 0.0
-        enemies = base_obs[7] > 0.0
-
-        has_ring = bool(tstate["has_ring"])
-        has_hammer = bool(tstate["has_hammer"])
-        bomb_radius = int(tstate["bomb_radius"])
-        avail_bombs = int(tstate["avail_bombs"])
-        facing_dx, facing_dy = int(tstate["facing_dx"]), int(tstate["facing_dy"])
-
-        in_danger = bool(danger[py, px] > 0.0)
-        passable = ~(solid | breakable | flames) if has_ring else ~(solid | breakable | bombs | flames)
-
-        dist = np.full((h, w), -1, dtype=np.int32)
-        first_action = np.zeros((h, w), dtype=np.int32)
-        q = deque([(px, py)])
-        dist[py, px] = 0
-        reach_map[py, px] = 1.0 if danger[py, px] == 0.0 else 0.2
-
-        valid_moves = [0]
-        escape_action = 0
-        min_safe_dist = 999
-
-        while q:
-            cx, cy = q.popleft()
-            d = int(dist[cy, cx])
-            if d >= 14:
-                continue
-            for act_id, (dx, dy) in self.DIRS.items():
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < w and 0 <= ny < h and dist[ny, nx] == -1 and passable[ny, nx]:
-                    if not in_danger and danger[ny, nx] > 0.0:
-                        continue
-                    if in_danger and danger[ny, nx] >= 0.88:
-                        continue
-                    dist[ny, nx] = d + 1
-                    fa = act_id if d == 0 else int(first_action[cy, cx])
-                    first_action[ny, nx] = fa
-                    if d == 0:
-                        valid_moves.append(act_id)
-                    if danger[ny, nx] == 0.0:
-                        reach_map[ny, nx] = max(0.1, 1.0 - (d + 1) / 15.0)
-                        if d + 1 < min_safe_dist:
-                            min_safe_dist = d + 1
-                            escape_action = fa
-                    else:
-                        reach_map[ny, nx] = 0.15
-                    q.append((nx, ny))
-
-        def can_push_bomb_in_dir(dx: int, dy: int) -> bool:
-            if not has_hammer or (dx == 0 and dy == 0) or bombs[py, px]:
-                return False
-            bx, by = px + dx, py + dy
-            dest_x, dest_y = bx + dx, by + dy
-            if not (0 <= bx < w and 0 <= by < h and 0 <= dest_x < w and 0 <= dest_y < h):
-                return False
-            if not bombs[by, bx]:
-                return False
-            if solid[dest_y, dest_x] or breakable[dest_y, dest_x] or bombs[dest_y, dest_x] or flames[dest_y, dest_x] or enemies[dest_y, dest_x]:
-                return False
-            return True
-
-        can_push_bomb_now = can_push_bomb_in_dir(facing_dx, facing_dy)
-
-        if has_hammer and not bombs[py, px]:
-            for act_id, (dx, dy) in self.DIRS.items():
-                if can_push_bomb_in_dir(dx, dy) and (dx != facing_dx or dy != facing_dy):
-                    if act_id not in valid_moves:
-                        valid_moves.append(act_id)
-
-        def compute_blast_zone(bx: int, by: int, radius: int):
-            blast = {(bx, by)}
-            for _, (dx, dy) in self.DIRS.items():
-                for r in range(1, radius + 1):
-                    nx, ny = bx + dx * r, by + dy * r
-                    if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx]:
-                        break
-                    blast.add((nx, ny))
-                    if breakable[ny, nx] or bombs[ny, nx]:
-                        break
-            return blast
-
-        def has_escape_if_bomb_at(bx: int, by: int, radius: int) -> bool:
-            blast_tiles = compute_blast_zone(bx, by, radius)
-            max_search_steps = max(6, radius + 3)
-            b_dist = np.full((h, w), -1, dtype=np.int32)
-            bq = deque([(bx, by)])
-            b_dist[by, bx] = 0
-            while bq:
-                cx, cy = bq.popleft()
-                cd = int(b_dist[cy, cx])
-                if cd >= max_search_steps:
-                    continue
-                for _, (dx, dy) in self.DIRS.items():
-                    nx, ny = cx + dx, cy + dy
-                    if 0 <= nx < w and 0 <= ny < h and b_dist[ny, nx] == -1 and passable[ny, nx] and danger[ny, nx] < 0.7:
-                        b_dist[ny, nx] = cd + 1
-                        if (nx, ny) not in blast_tiles and danger[ny, nx] == 0.0:
-                            return True
-                        bq.append((nx, ny))
-            return False
-
-        def count_targets_at(bx: int, by: int, radius: int) -> int:
-            t = 0
-            for _, (dx, dy) in self.DIRS.items():
-                for r in range(1, radius + 1):
-                    nx, ny = bx + dx * r, by + dy * r
-                    if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx]:
-                        break
-                    if enemies[ny, nx]:
-                        t += 3
-                    if breakable[ny, nx]:
-                        t += 1
-                        break
-            return t
-
-        can_place_bomb = (avail_bombs > 0) and (not bombs[py, px])
-        safe_escape_here = can_place_bomb and has_escape_if_bomb_at(px, py, bomb_radius)
-        targets_here = count_targets_at(px, py, bomb_radius) if safe_escape_here else 0
-        if safe_escape_here and targets_here > 0:
-            bomb_map[py, px] = min(1.0, targets_here / 4.0)
-        elif can_push_bomb_now:
-            bomb_map[py, px] = 1.0
-
-        for _, (dx, dy) in self.DIRS.items():
-            nx, ny = px + dx, py + dy
-            if 0 <= nx < w and 0 <= ny < h and passable[ny, nx] and danger[ny, nx] == 0.0:
-                if has_escape_if_bomb_at(nx, ny, bomb_radius):
-                    t = count_targets_at(nx, ny, bomb_radius)
-                    if t > 0:
-                        bomb_map[ny, nx] = min(1.0, t / 4.0)
-
-        return reach_map, bomb_map, {
-            "safe_escape_from_here": safe_escape_here,
-            "bomb_targets_here": targets_here,
-            "in_danger": in_danger,
-            "escape_action": escape_action,
-            "valid_moves": valid_moves,
-            "can_place_bomb": can_place_bomb,
-            "can_push_bomb_now": can_push_bomb_now,
-        }
+        reach_map, bomb_map, _, analysis = compute_bfs_features(
+            base_obs, tstate, self.width, self.height
+        )
+        return reach_map, bomb_map, analysis
 
     def _format_obs(self, base_obs: np.ndarray, reach_map: np.ndarray, bomb_map: np.ndarray) -> np.ndarray:
-        if self.expected_channels == 10:
-            return np.concatenate([base_obs[:8], reach_map[None, ...], bomb_map[None, ...]], axis=0)
-        if self.expected_channels == 8:
-            return base_obs[:8]
-        return np.concatenate([base_obs, reach_map[None, ...], bomb_map[None, ...]], axis=0)
+        return format_obs(base_obs, reach_map, bomb_map, expected_channels=self.expected_channels)
+
+    @staticmethod
+    def _get_session_tick(session: IGameSession) -> Optional[int]:
+        tick = getattr(session, "tick_count", None)
+        if tick is None:
+            tick = getattr(session, "ticks", None)
+        return int(tick) if tick is not None else None
 
     def compute_debug_only(self, session: IGameSession) -> Optional[AIDebugSnapshot]:
+        session_tick = self._get_session_tick(session)
+        if (
+            self._last_debug is not None
+            and session_tick is not None
+            and self._last_debug_tick == session_tick
+        ):
+            return self._last_debug
+
         tstate = session.get_player_tactical_state(self.player_id)
         base_obs = session.get_rl_base_observation(self.player_id)
         reach_map, bomb_map, analysis = self._compute_bfs_features(base_obs, tstate)
@@ -271,8 +394,9 @@ class PPOAgentController:
             reach_map=reach_map,
             bomb_map=bomb_map,
             in_danger=bool(analysis["in_danger"]),
-            shield_intervened=False,
+            shield_intervened=self._last_debug.shield_intervened if self._last_debug else False,
         )
+        self._last_debug_tick = session_tick
         return self._last_debug
 
     def get_action(self, session: Optional[IGameSession] = None) -> PlayerAction:
@@ -283,6 +407,21 @@ class PPOAgentController:
         if not tstate.get("is_alive", 0):
             return PlayerAction.NONE
 
+        self._tick_counter += 1
+        if "cooldown" in tstate:
+            # Player::update decrements cooldown before Player::handleCommand in Game::update,
+            # so cooldown <= 1 means the player will be ready to act on this tick.
+            if int(tstate["cooldown"]) > 1:
+                return PlayerAction.NONE
+            if self._idle_cooldown > 0:
+                self._idle_cooldown -= 1
+                return PlayerAction.NONE
+        else:
+            is_decision_tick = ((self._tick_counter - 1) % self.frame_skip) == 0
+            if not is_decision_tick:
+                return PlayerAction.NONE
+
+        self.ensure_model_loaded()
         base_obs = session.get_rl_base_observation(self.player_id)
         reach_map, bomb_map, analysis = self._compute_bfs_features(base_obs, tstate)
         obs = self._format_obs(base_obs, reach_map, bomb_map)
@@ -318,28 +457,13 @@ class PPOAgentController:
 
         exec_action = raw_action
         shield_intervened = False
-        valid_moves_list: List[int] = list(analysis["valid_moves"])  # type: ignore
-
         if self.tactical_shield:
-            if analysis["in_danger"] and int(analysis["escape_action"]) != 0 and (
-                exec_action == 0
-                or (exec_action == 5 and not analysis["can_push_bomb_now"])
-                or exec_action not in valid_moves_list
-            ):
-                exec_action = int(analysis["escape_action"])
-                shield_intervened = True
-            elif exec_action == 5 and not analysis["can_push_bomb_now"] and (
-                not analysis["can_place_bomb"]
-                or not analysis["safe_escape_from_here"]
-                or int(analysis["bomb_targets_here"]) == 0
-            ):
-                nz = [m for m in valid_moves_list if m != 0]
-                exec_action = int(np.random.choice(nz)) if nz else 0
-                shield_intervened = True
-            elif exec_action in (1, 2, 3, 4) and exec_action not in valid_moves_list:
-                nz = [m for m in valid_moves_list if m != 0]
-                exec_action = int(np.random.choice(nz)) if nz else 0
-                shield_intervened = True
+            exec_action, shield_intervened = apply_tactical_shield(raw_action, analysis)
+
+        if exec_action == int(PlayerAction.NONE):
+            self._idle_cooldown = max(0, self.frame_skip - 1)
+        else:
+            self._idle_cooldown = 0
 
         self._last_debug = AIDebugSnapshot(
             action_probs=action_probs,
@@ -350,7 +474,11 @@ class PPOAgentController:
             in_danger=bool(analysis["in_danger"]),
             shield_intervened=shield_intervened,
         )
+        self._last_debug_tick = self._get_session_tick(session)
         return PlayerAction(exec_action)
+
+    def get_command(self, session: Optional[IGameSession] = None) -> PlayerAction:
+        return self.get_action(session)
 
     def get_debug_snapshot(self) -> Optional[AIDebugSnapshot]:
         return self._last_debug

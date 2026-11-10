@@ -1,6 +1,13 @@
 #pragma once
+#include <vector>
 
 class World;
+
+struct SuddenDeathDangerTile {
+    int x;
+    int y;
+    int ticksUntilDrop;
+};
 
 class SuddenDeathSystem {
 private:
@@ -20,5 +27,7 @@ public:
     void process(World& world);
     
     int getTicksRemaining() const;
+    void setTicksRemaining(int ticks);
     bool isActive() const;
+    std::vector<SuddenDeathDangerTile> getImminentDangerTiles(int lookaheadTicks = 90) const;
 };
