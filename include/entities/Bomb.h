@@ -24,6 +24,7 @@ public:
     int getRadius() const;
     int getOwnerId() const;
     int getCreditOwnerId() const;
+    void setCreditOwnerId(int creditOwnerId);
     int getTimer() const;
     bool isSliding() const;
     int getSlideDx() const;

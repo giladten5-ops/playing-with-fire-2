@@ -65,57 +65,62 @@ std::vector<SuddenDeathDangerTile> SuddenDeathSystem::getImminentDangerTiles(int
 }
 
 void SuddenDeathSystem::process(World& world) {
-    if (m_isFinished) return;
+    if (!m_isFinished) {
+        if (m_ticksUntilStart > 0) {
+            m_ticksUntilStart--;
+        } else if (m_currentCooldown > 0) {
+            m_currentCooldown--;
+        } else {
+            if (world.getBoard().getCellType(m_x, m_y) != CellType::SOLID_WALL) {
+                world.setSuddenDeathTile(m_x, m_y, true);
+            }
+            world.getBoard().setCellType(m_x, m_y, CellType::SOLID_WALL);
 
-    if (m_ticksUntilStart > 0) {
-        m_ticksUntilStart--;
-        return;
-    }
-
-    if (m_currentCooldown > 0) {
-        m_currentCooldown--;
-        return;
-    }
-
-    world.getBoard().setCellType(m_x, m_y, CellType::SOLID_WALL);
-
-    auto crushEntities = [&](const std::vector<std::unique_ptr<Entity>>& list) {
-        for (const auto& e : list) {
-            if (e->isAlive() && e->getX() == m_x && e->getY() == m_y) {
-                if (e->getType() == EntityType::PLAYER) {
-                    auto* p = static_cast<Player*>(e.get());
-                    int maxHits = p->getLives() + 1;
-                    while (p->isAlive() && maxHits-- > 0) {
-                        p->onExplosionHit(world, true);
+            auto crushNonPlayerEntities = [&](const std::vector<std::unique_ptr<Entity>>& list) {
+                for (const auto& e : list) {
+                    if (e->isAlive() && e->getX() == m_x && e->getY() == m_y) {
+                        if (e->getType() != EntityType::PLAYER) {
+                            e->destroy();
+                        }
                     }
-                    if (p->isAlive()) {
-                        p->destroy();
-                    }
-                } else {
-                    e->destroy();
                 }
+            };
+            crushNonPlayerEntities(world.getEntities());
+            crushNonPlayerEntities(world.getSpawnQueue());
+
+            if (m_dx == 1 && m_x == m_maxX) {
+                m_dx = 0; m_dy = 1; m_minY++;
+            } else if (m_dx == 0 && m_dy == 1 && m_y == m_maxY) {
+                m_dx = -1; m_dy = 0; m_maxX--;
+            } else if (m_dx == -1 && m_x == m_minX) {
+                m_dx = 0; m_dy = -1; m_maxY--;
+            } else if (m_dx == 0 && m_dy == -1 && m_y == m_minY) {
+                m_dx = 1; m_dy = 0; m_minX++;
+            }
+
+            m_x += m_dx;
+            m_y += m_dy;
+
+            if (m_minX > m_maxX || m_minY > m_maxY || (m_maxX - m_minX <= 4 && m_maxY - m_minY <= 4)) {
+                m_isFinished = true;
+            } else {
+                m_currentCooldown = m_dropCooldown;
+            }
+        }
+    }
+
+    world.clearImminentSuddenDeathTicks();
+    for (const auto& tile : getImminentDangerTiles(90)) {
+        world.setImminentSuddenDeathTick(tile.x, tile.y, tile.ticksUntilDrop);
+    }
+
+    auto updatePlayers = [&](const std::vector<std::unique_ptr<Entity>>& list) {
+        for (const auto& e : list) {
+            if (e->isAlive() && e->getType() == EntityType::PLAYER) {
+                static_cast<Player*>(e.get())->updateSuddenDeathStatus(world);
             }
         }
     };
-    crushEntities(world.getEntities());
-    crushEntities(world.getSpawnQueue());
-
-    if (m_dx == 1 && m_x == m_maxX) {
-        m_dx = 0; m_dy = 1; m_minY++;
-    } else if (m_dx == 0 && m_dy == 1 && m_y == m_maxY) {
-        m_dx = -1; m_dy = 0; m_maxX--;
-    } else if (m_dx == -1 && m_x == m_minX) {
-        m_dx = 0; m_dy = -1; m_maxY--;
-    } else if (m_dx == 0 && m_dy == -1 && m_y == m_minY) {
-        m_dx = 1; m_dy = 0; m_minX++;
-    }
-
-    m_x += m_dx;
-    m_y += m_dy;
-
-    if (m_minX > m_maxX || m_minY > m_maxY || (m_maxX - m_minX <= 4 && m_maxY - m_minY <= 4)) {
-        m_isFinished = true;
-    } else {
-        m_currentCooldown = m_dropCooldown;
-    }
+    updatePlayers(world.getEntities());
+    updatePlayers(world.getSpawnQueue());
 }

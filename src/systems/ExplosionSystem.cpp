@@ -28,23 +28,27 @@ void ExplosionSystem::process(World& world) {
             int bx = bombToExplode->getX();
             int by = bombToExplode->getY();
             int radius = bombToExplode->getRadius();
+            int ownerId = bombToExplode->getOwnerId();
             int creditOwnerId = bombToExplode->getCreditOwnerId();
 
             bombToExplode->destroy();
 
-            explodeTile(world, bx, by, creditOwnerId);
+            explodeTile(world, bx, by, ownerId, creditOwnerId);
 
-            explodeInDirection(world, bx, by, 1, 0, radius, creditOwnerId);
-            explodeInDirection(world, bx, by, -1, 0, radius, creditOwnerId);
-            explodeInDirection(world, bx, by, 0, 1, radius, creditOwnerId);
-            explodeInDirection(world, bx, by, 0, -1, radius, creditOwnerId);
+            explodeInDirection(world, bx, by, 1, 0, radius, ownerId, creditOwnerId);
+            explodeInDirection(world, bx, by, -1, 0, radius, ownerId, creditOwnerId);
+            explodeInDirection(world, bx, by, 0, 1, radius, ownerId, creditOwnerId);
+            explodeInDirection(world, bx, by, 0, -1, radius, ownerId, creditOwnerId);
 
             world.sync();
         }
     }
 }
 
-bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ownerId) {
+bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ownerId, int creditOwnerId) {
+    if (creditOwnerId <= 0) {
+        creditOwnerId = ownerId;
+    }
     if (!world.isPositionValid(targetX, targetY)) {
         return false;
     }
@@ -57,8 +61,8 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ow
     bool explosionStopped = false;
     if (cellType == CellType::BREAKABLE_WALL) {
         world.getBoard().setCellType(targetX, targetY, CellType::EMPTY);
-        if (ownerId > 0) {
-            world.recordWallDestroyed(ownerId);
+        if (creditOwnerId > 0) {
+            world.recordWallDestroyed(creditOwnerId);
         }
         PowerUpFactory::trySpawn(world, targetX, targetY);
         explosionStopped = true;
@@ -69,25 +73,30 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ow
     for (auto* entity : entitiesHere) {
         if (entity->isAlive()) {
             EntityType type = entity->getType();
+            if (type == EntityType::BOMB) {
+                auto* otherBomb = static_cast<Bomb*>(entity);
+                if (otherBomb->isSliding()) {
+                    continue;
+                }
+                if (creditOwnerId > 0) {
+                    otherBomb->setCreditOwnerId(creditOwnerId);
+                }
+            }
+
             bool isPlayer = (type == EntityType::PLAYER);
             int victimId = isPlayer ? static_cast<Player*>(entity)->getId() : -1;
             int livesBefore = isPlayer ? static_cast<Player*>(entity)->getLives() : 0;
             bool blocksBlast = entity->stopsExplosion();
 
-            if (type == EntityType::BOMB && ownerId > 0) {
-                // Propagate credit owner in chain reactions
-                static_cast<Bomb*>(entity)->push(0, 0, ownerId);
-            }
-
             entity->onExplosionHit(world);
 
-            if (isPlayer && ownerId > 0 && ownerId != victimId) {
+            if (isPlayer && creditOwnerId > 0 && creditOwnerId != victimId) {
                 int livesAfter = entity->isAlive() ? static_cast<Player*>(entity)->getLives() : 0;
                 if (livesAfter < livesBefore) {
-                    world.recordEnemyHit(ownerId);
+                    world.recordEnemyHit(creditOwnerId);
                 }
                 if (!entity->isAlive()) {
-                    world.recordEnemyKilled(ownerId);
+                    world.recordEnemyKilled(creditOwnerId);
                 }
             }
 
@@ -97,14 +106,14 @@ bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ow
         }
     }
 
-    world.addEntity(std::make_unique<Flame>(targetX, targetY, 30, ownerId));
+    world.addEntity(std::make_unique<Flame>(targetX, targetY, 30, ownerId, creditOwnerId));
 
     return !explosionStopped;
 }
 
-void ExplosionSystem::explodeInDirection(World& world, int startX, int startY, int dx, int dy, int radius, int ownerId) {
+void ExplosionSystem::explodeInDirection(World& world, int startX, int startY, int dx, int dy, int radius, int ownerId, int creditOwnerId) {
     for (int i = 1; i <= radius; i++) {
-        if (!explodeTile(world, startX + i * dx, startY + i * dy, ownerId)) {
+        if (!explodeTile(world, startX + i * dx, startY + i * dy, ownerId, creditOwnerId)) {
             break;
         }
     }

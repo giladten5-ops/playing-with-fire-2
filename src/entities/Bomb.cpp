@@ -11,6 +11,11 @@ Bomb::Bomb(int x, int y, int timer, int radius, int ownerId)
 int Bomb::getRadius() const { return m_radius; }
 int Bomb::getOwnerId() const { return m_ownerId; }
 int Bomb::getCreditOwnerId() const { return m_creditOwnerId; }
+void Bomb::setCreditOwnerId(int creditOwnerId) {
+    if (creditOwnerId > 0) {
+        m_creditOwnerId = creditOwnerId;
+    }
+}
 int Bomb::getTimer() const { return m_timer; }
 bool Bomb::isSliding() const { return m_dx != 0 || m_dy != 0; }
 int Bomb::getSlideDx() const { return m_dx; }
@@ -30,7 +35,7 @@ bool Bomb::canSlideTo(const World& world, int x, int y) {
         return false;
     }
     for (const auto* e : world.getEntitiesAt(x, y)) {
-        if (e->isAlive() && (e->getType() == EntityType::PLAYER || e->getType() == EntityType::FLAME)) {
+        if (e->isAlive() && e->getType() == EntityType::PLAYER) {
             return false;
         }
     }

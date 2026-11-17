@@ -19,8 +19,23 @@ Command getOppositeCommand(Command cmd) {
 }
 } // namespace
 
+int DumbBot::s_sdCautionPercent = DumbBot::DEFAULT_SD_CAUTION_PERCENT;
+
+void DumbBot::setSuddenDeathCautionPercent(int percent) {
+    s_sdCautionPercent = std::clamp(percent, 0, 100);
+}
+
+int DumbBot::getSuddenDeathCautionPercent() {
+    return s_sdCautionPercent;
+}
+
 DumbBot::DumbBot(int startX, int startY, int id)
-    : Player(startX, startY, id) {}
+    : Player(startX, startY, id) {
+    int offset = ((id % 3) - 1) * 6;
+    m_sdCautionPercent = std::clamp(s_sdCautionPercent + offset, 0, 100);
+    m_sdLookaheadTicks = 45 + (id % 3) * 15;
+    m_sdAwareThisWindow = (std::rand() % 100) < m_sdCautionPercent;
+}
 
 bool DumbBot::isBot() const { return true; }
 std::string DumbBot::getDisplayName() const { return "BOT" + std::to_string(getId()); }
@@ -32,7 +47,12 @@ char DumbBot::getDisplayChar() const {
 
 bool DumbBot::canStepOn(int x, int y, const World& world) const {
     if (!world.isPositionValid(x, y)) return false;
-    if (world.getBoard().getCellType(x, y) != CellType::EMPTY) return false;
+    CellType ct = world.getBoard().getCellType(x, y);
+    if (ct != CellType::EMPTY) {
+        if (!(world.isSuddenDeathTile(getX(), getY()) && world.isSuddenDeathTile(x, y))) {
+            return false;
+        }
+    }
 
     for (const auto* e : world.getEntitiesAt(x, y)) {
         if (!e->isAlive()) continue;
@@ -75,6 +95,20 @@ bool DumbBot::hasClearBlastPath(int bx, int by, int tx, int ty, const World& wor
 
 int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx, int extraBy, int extraRadius) const {
     if (!world.isPositionValid(x, y)) return 0;
+
+    int sdMinTimer = 9999;
+    if (world.isSuddenDeathTile(x, y)) {
+        sdMinTimer = std::max(35, getSuddenDeathTimer());
+    } else {
+        int ticksUntilDrop = world.getSuddenDeathTicksUntilDrop(x, y);
+        if (ticksUntilDrop < 9999) {
+            if (m_sdAwareThisWindow && ticksUntilDrop <= m_sdLookaheadTicks) {
+                sdMinTimer = std::max(1, ticksUntilDrop);
+            } else if (!m_sdAwareThisWindow && ticksUntilDrop <= 6) {
+                sdMinTimer = std::max(1, ticksUntilDrop);
+            }
+        }
+    }
 
     struct BombData {
         int x;
@@ -121,7 +155,7 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
         bombs.push_back({extraBx, extraBy, extraRadius, DEFAULT_BOMB_TIMER});
     }
 
-    if (bombs.empty()) return 9999;
+    if (bombs.empty()) return sdMinTimer;
 
     // Propagate chain-reaction timers across bombs in line-of-fire
     bool changed = true;
@@ -143,7 +177,7 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
         }
     }
 
-    int minTimer = 9999;
+    int minTimer = sdMinTimer;
     for (const auto& b : bombs) {
         if (b.x == x && std::abs(b.y - y) <= b.radius) {
             if (hasClearBlastPath(b.x, b.y, x, y, world)) {
@@ -448,6 +482,19 @@ void DumbBot::update(World& world) {
     Player::update(world);
     m_ticksAlive++;
     if (m_bombCooldown > 0) m_bombCooldown--;
+
+    int baseCaution = std::clamp(s_sdCautionPercent + ((getId() % 3) - 1) * 6, 0, 100);
+    m_sdCautionPercent = baseCaution;
+    if (m_sdDecisionTimer > 0) {
+        m_sdDecisionTimer--;
+    } else {
+        m_sdDecisionTimer = SD_DECISION_WINDOW_TICKS + (std::rand() % 12);
+        int effectiveCaution = m_sdCautionPercent;
+        if (world.countBombsForOwner(getId()) > 0 && s_sdCautionPercent < 100 && s_sdCautionPercent > 0) {
+            effectiveCaution = std::max(5, effectiveCaution - 10);
+        }
+        m_sdAwareThisWindow = (std::rand() % 100) < effectiveCaution;
+    }
 
     if (!isAlive() || isOnCooldown()) return;
 

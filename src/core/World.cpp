@@ -3,7 +3,10 @@
 #include "../../include/entities/Bomb.h"
 #include <algorithm>
 
-World::World(int width, int height) : m_board(width, height) {}
+World::World(int width, int height)
+    : m_board(width, height),
+      m_suddenDeathTiles(width, std::vector<bool>(height, false)),
+      m_imminentSuddenDeathTicks(width, std::vector<int>(height, 9999)) {}
 
 Board& World::getBoard() { return m_board; }
 const Board& World::getBoard() const { return m_board; }
@@ -78,6 +81,61 @@ bool World::isTileFree(int x, int y) const {
     return true;
 }
 
+bool World::canPlayerMoveTo(int fromX, int fromY, int toX, int toY) const {
+    if (!isPositionValid(toX, toY)) {
+        return false;
+    }
+    if (isTileFree(toX, toY)) {
+        return true;
+    }
+    if (isSuddenDeathTile(fromX, fromY) && isSuddenDeathTile(toX, toY)) {
+        for (const auto& entity : m_entities) {
+            if (entity->isAlive() && entity->getX() == toX && entity->getY() == toY && entity->isSolid()) {
+                return false;
+            }
+        }
+        for (const auto& entity : m_spawnQueue) {
+            if (entity->isAlive() && entity->getX() == toX && entity->getY() == toY && entity->isSolid()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+void World::setSuddenDeathTile(int x, int y, bool active) {
+    if (isPositionValid(x, y)) {
+        m_suddenDeathTiles[x][y] = active;
+    }
+}
+
+bool World::isSuddenDeathTile(int x, int y) const {
+    if (!isPositionValid(x, y)) {
+        return false;
+    }
+    return m_suddenDeathTiles[x][y];
+}
+
+void World::clearImminentSuddenDeathTicks() {
+    for (auto& col : m_imminentSuddenDeathTicks) {
+        std::fill(col.begin(), col.end(), 9999);
+    }
+}
+
+void World::setImminentSuddenDeathTick(int x, int y, int ticksUntilDrop) {
+    if (isPositionValid(x, y)) {
+        m_imminentSuddenDeathTicks[x][y] = std::min(m_imminentSuddenDeathTicks[x][y], ticksUntilDrop);
+    }
+}
+
+int World::getSuddenDeathTicksUntilDrop(int x, int y) const {
+    if (!isPositionValid(x, y)) {
+        return 9999;
+    }
+    return m_imminentSuddenDeathTicks[x][y];
+}
+
 int World::countBombsForOwner(int ownerId) const {
     int count = 0;
     for (const auto& entity : m_entities) {
@@ -126,6 +184,8 @@ void World::clear() {
     for (int x = 0; x < width; x++) {
         for (int y = 0; y < height; y++) {
             m_board.setCellType(x, y, CellType::EMPTY);
+            m_suddenDeathTiles[x][y] = false;
+            m_imminentSuddenDeathTicks[x][y] = 9999;
         }
     }
 }

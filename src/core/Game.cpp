@@ -498,6 +498,7 @@ std::vector<FlameInfo> Game::getFlames() const {
             fi.y = flame->getY();
             fi.timer = flame->getTimer();
             fi.ownerId = flame->getOwnerId();
+            fi.creditOwnerId = flame->getCreditOwnerId();
             flames.push_back(fi);
         }
     }

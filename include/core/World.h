@@ -15,6 +15,8 @@ private:
     std::unordered_map<int, int> m_wallsDestroyedByOwner;
     std::unordered_map<int, int> m_enemiesKilledByOwner;
     std::unordered_map<int, int> m_enemiesHitByOwner;
+    std::vector<std::vector<bool>> m_suddenDeathTiles;
+    std::vector<std::vector<int>> m_imminentSuddenDeathTicks;
 
 public:
     World(int width, int height);
@@ -32,6 +34,12 @@ public:
 
     bool isPositionValid(int x, int y) const;
     bool isTileFree(int x, int y) const;
+    bool canPlayerMoveTo(int fromX, int fromY, int toX, int toY) const;
+    void setSuddenDeathTile(int x, int y, bool active);
+    bool isSuddenDeathTile(int x, int y) const;
+    void clearImminentSuddenDeathTicks();
+    void setImminentSuddenDeathTick(int x, int y, int ticksUntilDrop);
+    int getSuddenDeathTicksUntilDrop(int x, int y) const;
     int countBombsForOwner(int ownerId) const;
     Player* getPlayer(int id);
     const Player* getPlayer(int id) const;
