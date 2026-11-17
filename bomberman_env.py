@@ -12,6 +12,7 @@ from rl_utils import (
     DIRS,
     apply_tactical_shield,
     choose_bfs_fallback_action,
+    compute_action_mask,
     compute_bfs_features,
     format_obs,
 )
@@ -21,7 +22,7 @@ _SHARED_OPPONENT_MODELS: Dict[str, Tuple[float, Any, int]] = {}
 
 
 def _get_shared_opponent_model(model_path: Optional[str]) -> Tuple[Optional[Any], int]:
-    """Loads and caches a frozen PPO checkpoint once per process, reloading only if file mtime changes."""
+    """Loads and caches a frozen PPO or MaskablePPO checkpoint once per process, reloading only if file mtime changes."""
     if not model_path or not os.path.exists(model_path):
         return None, 12
     try:
@@ -29,11 +30,19 @@ def _get_shared_opponent_model(model_path: Optional[str]) -> Tuple[Optional[Any]
         cached = _SHARED_OPPONENT_MODELS.get(model_path)
         if cached is not None and cached[0] == mtime:
             return cached[1], cached[2]
-        model = PPO.load(
-            model_path,
-            device="cpu",
-            custom_objects={"BombermanCNN": BombermanCNN},
-        )
+        try:
+            from sb3_contrib import MaskablePPO
+            model = MaskablePPO.load(
+                model_path,
+                device="cpu",
+                custom_objects={"BombermanCNN": BombermanCNN},
+            )
+        except Exception:
+            model = PPO.load(
+                model_path,
+                device="cpu",
+                custom_objects={"BombermanCNN": BombermanCNN},
+            )
         model.policy.set_training_mode(False)
         obs_shape = getattr(model.observation_space, "shape", (12, 13, 13))
         expected_channels = int(obs_shape[0]) if obs_shape else 12
@@ -125,6 +134,10 @@ class BombermanEnv(gym.Env):
     def _format_obs(self, base_obs, reach_map, bomb_map):
         return format_obs(base_obs, reach_map, bomb_map, expected_channels=self.n_channels)
 
+    def action_masks(self) -> np.ndarray:
+        """Returns boolean action mask [idle, up, down, left, right, bomb] for MaskablePPO."""
+        return compute_action_mask(self._cached_analysis)
+
     def _get_ai_opponent_commands(self) -> List[bme.PlayerCommand]:
         """Computes frozen Self-Play PPO + Tactical Shield commands for active AI opponent slots."""
         if not self._active_ai_opponent_ids:
@@ -146,7 +159,13 @@ class BombermanEnv(gym.Env):
                     opp_base, opp_reach, opp_bomb, expected_channels=opp_channels
                 )
                 with th.no_grad():
-                    raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
+                    opp_mask = compute_action_mask(opp_analysis)
+                    try:
+                        raw_act, _ = opp_model.predict(
+                            opp_obs, action_masks=opp_mask, deterministic=False
+                        )
+                    except (TypeError, ValueError):
+                        raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
                 exec_act, _ = apply_tactical_shield(
                     int(raw_act), opp_analysis, rng=self.np_random
                 )

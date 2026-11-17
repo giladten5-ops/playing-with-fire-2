@@ -1,3 +1,4 @@
+from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol, Tuple
 import numpy as np
@@ -5,7 +6,13 @@ import pygame
 
 from gui.config import BOARD_HEIGHT_TILES, BOARD_WIDTH_TILES, DEFAULT_MODEL_PATHS
 from gui.state_snapshot import AIDebugSnapshot, IGameSession, PlayerAction
-from rl_utils import DIRS, apply_tactical_shield, compute_bfs_features, format_obs
+from rl_utils import (
+    DIRS,
+    apply_tactical_shield,
+    compute_action_mask,
+    compute_bfs_features,
+    format_obs,
+)
 
 
 class IPlayerController(Protocol):
@@ -265,20 +272,28 @@ class PPOAgentController:
         shared_model: Optional[object] = None,
         expected_channels: int = 12,
         lazy: bool = False,
+        model_path: Optional[str] = None,
+        temperature: float = 0.2,
     ) -> None:
         self.player_id = player_id
         self.width = width
         self.height = height
         self.tactical_shield = tactical_shield
         self.frame_skip = max(1, int(frame_skip))
+        self.temperature = float(temperature)
         self._tick_counter = 0
         self._idle_cooldown = 0
+        self._recent_positions: deque[Tuple[int, int]] = deque(maxlen=8)
         self.model = shared_model
         self.expected_channels = expected_channels
+        self.model_path = model_path
         self._last_debug: Optional[AIDebugSnapshot] = None
         self._last_debug_tick: Optional[int] = None
         if self.model is None:
-            if PPOAgentController._model_load_attempted:
+            if self.model_path is not None:
+                if not lazy:
+                    self._load_from_path(self.model_path)
+            elif PPOAgentController._model_load_attempted:
                 self.model = PPOAgentController._shared_model
                 self.expected_channels = PPOAgentController._shared_expected_channels
             elif not lazy:
@@ -302,13 +317,55 @@ class PPOAgentController:
     def reset(self) -> None:
         self._tick_counter = 0
         self._idle_cooldown = 0
+        self._recent_positions.clear()
         self._last_debug = None
         self._last_debug_tick = None
 
     def ensure_model_loaded(self) -> None:
         """Ensures the PPO model load has been attempted once when AI is actually needed."""
         if self.model is None:
-            self._load_model_if_available()
+            if self.model_path is not None:
+                self._load_from_path(self.model_path)
+            else:
+                self._load_model_if_available()
+
+    def _load_from_path(self, path: str) -> None:
+        p = Path(path)
+        if not p.is_file():
+            self.model = None
+            return
+        try:
+            if pygame.display.get_init():
+                pygame.event.pump()
+            import torch as th
+            from bomberman_env import BombermanCNN
+            try:
+                from sb3_contrib import MaskablePPO
+                self.model = MaskablePPO.load(
+                    str(p), custom_objects={"BombermanCNN": BombermanCNN}
+                )
+            except Exception:
+                from stable_baselines3 import PPO
+                self.model = PPO.load(
+                    str(p), custom_objects={"BombermanCNN": BombermanCNN}
+                )
+
+            obs_shape = getattr(self.model.observation_space, "shape", None)
+            if obs_shape and len(obs_shape) == 3:
+                self.expected_channels = int(obs_shape[0])
+            dummy_obs = np.zeros(
+                (self.expected_channels, self.height, self.width), dtype=np.float32
+            )
+            dummy_mask = np.ones(6, dtype=bool)
+            with th.no_grad():
+                obs_tensor, _ = self.model.policy.obs_to_tensor(dummy_obs)
+                try:
+                    _ = self.model.policy.get_distribution(obs_tensor, action_masks=dummy_mask)
+                except TypeError:
+                    _ = self.model.policy.get_distribution(obs_tensor)
+                _ = self.model.policy.predict_values(obs_tensor)
+        except Exception:
+            self.model = None
 
     def _load_model_if_available(self) -> None:
         if self.model is not None:
@@ -329,13 +386,18 @@ class PPOAgentController:
                 pygame.event.pump()
 
             import torch as th
-            from stable_baselines3 import PPO
             from bomberman_env import BombermanCNN
+            try:
+                from sb3_contrib import MaskablePPO
+                self.model = MaskablePPO.load(
+                    str(model_path), custom_objects={"BombermanCNN": BombermanCNN}
+                )
+            except Exception:
+                from stable_baselines3 import PPO
+                self.model = PPO.load(
+                    str(model_path), custom_objects={"BombermanCNN": BombermanCNN}
+                )
 
-            if pygame.display.get_init():
-                pygame.event.pump()
-
-            self.model = PPO.load(str(model_path), custom_objects={"BombermanCNN": BombermanCNN})
             obs_shape = getattr(self.model.observation_space, "shape", None)
             if obs_shape and len(obs_shape) == 3:
                 self.expected_channels = int(obs_shape[0])
@@ -343,9 +405,13 @@ class PPOAgentController:
             dummy_obs = np.zeros(
                 (self.expected_channels, self.height, self.width), dtype=np.float32
             )
+            dummy_mask = np.ones(6, dtype=bool)
             with th.no_grad():
                 obs_tensor, _ = self.model.policy.obs_to_tensor(dummy_obs)
-                _ = self.model.policy.get_distribution(obs_tensor)
+                try:
+                    _ = self.model.policy.get_distribution(obs_tensor, action_masks=dummy_mask)
+                except TypeError:
+                    _ = self.model.policy.get_distribution(obs_tensor)
                 _ = self.model.policy.predict_values(obs_tensor)
 
             PPOAgentController._shared_model = self.model
@@ -429,20 +495,66 @@ class PPOAgentController:
         raw_action = 0
         action_probs: Optional[List[float]] = None
         value_est = 0.0
+        cur_pos = (int(tstate.get("x", -1)), int(tstate.get("y", -1)))
 
         if self.model is not None:
             try:
                 import torch as th
+                action_mask = compute_action_mask(analysis)
                 obs_tensor, _ = self.model.policy.obs_to_tensor(obs)
                 with th.no_grad():
-                    dist = self.model.policy.get_distribution(obs_tensor)
+                    try:
+                        dist = self.model.policy.get_distribution(
+                            obs_tensor, action_masks=action_mask
+                        )
+                    except TypeError:
+                        dist = self.model.policy.get_distribution(obs_tensor)
                     probs = dist.distribution.probs.cpu().numpy()[0]
                     action_probs = [float(p) for p in probs]
                     val = self.model.policy.predict_values(obs_tensor).cpu().numpy()[0]
                     value_est = float(val.item() if hasattr(val, "item") else val[0])
-                raw_action = int(np.argmax(probs))
+
+                # Check for 2-cycle oscillation in recent positions (A <-> B <-> A <-> B)
+                is_oscillating = False
+                if len(self._recent_positions) >= 4:
+                    if (
+                        self._recent_positions[-1] == self._recent_positions[-3]
+                        and cur_pos == self._recent_positions[-2]
+                    ):
+                        is_oscillating = True
+
+                if is_oscillating:
+                    hunt_act = int(analysis.get("hunt_action", 0))
+                    if hunt_act != 0 and hunt_act in analysis.get("valid_moves", []):
+                        raw_action = hunt_act
+                    elif self.temperature > 0.0:
+                        p_temp = np.power(probs, 1.0 / max(0.01, self.temperature))
+                        p_sum = np.sum(p_temp)
+                        raw_action = (
+                            int(np.random.choice(len(p_temp), p=p_temp / p_sum))
+                            if p_sum > 0
+                            else int(np.argmax(probs))
+                        )
+                    else:
+                        raw_action = int(np.argmax(probs))
+                elif self.temperature > 0.0:
+                    p_temp = np.power(probs, 1.0 / max(0.01, self.temperature))
+                    p_sum = np.sum(p_temp)
+                    raw_action = (
+                        int(np.random.choice(len(p_temp), p=p_temp / p_sum))
+                        if p_sum > 0
+                        else int(np.argmax(probs))
+                    )
+                else:
+                    raw_action = int(np.argmax(probs))
             except Exception:
-                pred, _ = self.model.predict(obs, deterministic=True)
+                try:
+                    action_mask = compute_action_mask(analysis)
+                    pred, _ = self.model.predict(
+                        obs, action_masks=action_mask, deterministic=(self.temperature == 0.0)
+                    )
+                except (TypeError, Exception):
+                    pred, _ = self.model.predict(obs, deterministic=(self.temperature == 0.0))
                 raw_action = int(pred.item() if hasattr(pred, "item") else pred)
         else:
             # Tactical BFS heuristic fallback when no PPO model file is present
@@ -451,9 +563,15 @@ class PPOAgentController:
             elif analysis["safe_escape_from_here"] and int(analysis["bomb_targets_here"]) > 0:
                 raw_action = int(PlayerAction.PLACE_BOMB)
             else:
-                valid_moves: List[int] = list(analysis["valid_moves"])  # type: ignore
-                non_zero = [m for m in valid_moves if m != 0]
-                raw_action = int(np.random.choice(non_zero)) if non_zero else 0
+                hunt_act = int(analysis.get("hunt_action", 0))
+                if hunt_act != 0 and hunt_act in analysis.get("valid_moves", []):
+                    raw_action = hunt_act
+                else:
+                    valid_moves: List[int] = list(analysis["valid_moves"])  # type: ignore
+                    non_zero = [m for m in valid_moves if m != 0]
+                    raw_action = int(np.random.choice(non_zero)) if non_zero else 0
+
+        self._recent_positions.append(cur_pos)
 
         exec_action = raw_action
         shield_intervened = False

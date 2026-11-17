@@ -56,11 +56,14 @@ def compute_bfs_features(
             "trapped_enemies_count": 0,
             "in_danger": False,
             "escape_action": 0,
+            "hunt_action": 0,
             "valid_moves": [0],
             "can_place_bomb": False,
             "can_push_bomb_now": False,
             "push_actions": [],
             "tactical_push_actions": [],
+            "active_bombs_count": 0,
+            "closest_bombing_site": None,
         }
 
     solid = base_obs[0] > 0.0
@@ -338,55 +341,90 @@ def compute_bfs_features(
                 1.0, (targets_here + enemy_targets_here * 2 + compressed_here * 0.5) / 5.0
             )
 
-    for _, (dx, dy) in DIRS.items():
-        nx, ny = px + dx, py + dy
-        if 0 <= nx < w and 0 <= ny < h and passable[ny, nx] and danger[ny, nx] == 0.0:
-            if has_escape_if_bomb_at(nx, ny, bomb_radius):
-                t, et, comp_t, trap_t = count_targets_at(nx, ny, bomb_radius)
-                if t > 0:
-                    if trap_t:
-                        bomb_map[ny, nx] = 1.0
-                    else:
-                        bomb_map[ny, nx] = min(
-                            1.0, (t + et * 2 + comp_t * 0.5) / 5.0
-                        )
+    # Collect all reachable safe bombing opportunity sites across the board
+    bombing_sites: List[Tuple[int, int, int, int, int, int, bool]] = []
+    # (distance, bx, by, targets, enemy_targets, compressed, trap)
+
+    # Check all safe reachable tiles for future bombing sites
+    reach_ys, reach_xs = np.where((dist >= 0) & (danger == 0.0) & (~bombs))
+    for ry, rx in zip(reach_ys, reach_xs):
+        rx, ry = int(rx), int(ry)
+        if rx == px and ry == py:
+            continue
+        if has_escape_if_bomb_at(rx, ry, bomb_radius):
+            t, et, comp_t, trap_t = count_targets_at(rx, ry, bomb_radius)
+            if t > 0:
+                bomb_score = 1.0 if trap_t else min(0.9, (t + et * 2 + comp_t * 0.5) / 5.0)
+                bomb_map[ry, rx] = max(float(bomb_map[ry, rx]), bomb_score)
+                bombing_sites.append((int(dist[ry, rx]), rx, ry, t, et, comp_t, trap_t))
+
+    # Sort bombing sites by BFS distance
+    bombing_sites.sort(key=lambda s: s[0])
 
     hunt_action = 0
     pu_ys, pu_xs = np.where((powerups) & (dist > 0) & (danger == 0.0))
     en_ys, en_xs = np.where(enemies)
+
+    closest_pu_d = 999
+    closest_pu_pos = None
+    if len(pu_xs) > 0:
+        for py_u, px_u in zip(pu_ys, pu_xs):
+            d_u = int(dist[py_u, px_u])
+            if 0 < d_u < closest_pu_d:
+                closest_pu_d = d_u
+                closest_pu_pos = (int(px_u), int(py_u))
+
     if not in_danger:
-        best_target_score = 9999.0
-        for act in valid_moves:
-            if act == 0 or act not in DIRS:
-                continue
-            dx, dy = DIRS[act]
-            nx, ny = px + dx, py + dy
-            if not (0 <= nx < w and 0 <= ny < h):
-                continue
-            score = 999.0
-            if len(pu_xs) > 0:
-                pu_d = float(np.min(np.abs(pu_xs - nx) + np.abs(pu_ys - ny)))
-                score = min(score, pu_d * 0.7)
-            if len(en_xs) > 0:
-                en_d = float(np.min(np.abs(en_xs - nx) + np.abs(en_ys - ny)))
-                score = min(score, en_d)
-            if score < best_target_score:
-                best_target_score = score
-                hunt_action = act
+        if targets_here > 0 and safe_escape_here:
+            # Standing on an immediate bombing target; BOMB is ready
+            hunt_action = 0
+        elif closest_pu_pos is not None and closest_pu_d <= 4:
+            # Grab nearby powerup first
+            hunt_action = int(first_action[closest_pu_pos[1], closest_pu_pos[0]])
+        elif bombing_sites:
+            # Head toward closest safe bombing opportunity
+            target_bx, target_by = bombing_sites[0][1], bombing_sites[0][2]
+            hunt_action = int(first_action[target_by, target_bx])
+        elif closest_pu_pos is not None:
+            # Reachable powerup
+            hunt_action = int(first_action[closest_pu_pos[1], closest_pu_pos[0]])
+        elif len(en_xs) > 0:
+            reach_en = [(int(dist[ey, ex]), int(ex), int(ey)) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0]
+            if reach_en:
+                reach_en.sort(key=lambda x: x[0])
+                hunt_action = int(first_action[reach_en[0][2], reach_en[0][1]])
+            else:
+                # Enemies are blocked behind walls and no bombing sites in range:
+                # Move to reachable tile that minimizes Manhattan distance to closest enemy
+                best_rx, best_ry = px, py
+                min_m_dist = 999
+                for ry, rx in zip(reach_ys, reach_xs):
+                    rx, ry = int(rx), int(ry)
+                    m_d = int(np.min(np.abs(en_xs - rx) + np.abs(en_ys - ry)))
+                    if m_d < min_m_dist:
+                        min_m_dist = m_d
+                        best_rx, best_ry = rx, ry
+                if (best_rx, best_ry) != (px, py):
+                    hunt_action = int(first_action[best_ry, best_rx])
 
     safe_reachable_count = int(np.sum((dist >= 0) & (danger == 0.0)))
     phi_space = min(safe_reachable_count, 35) * 0.12
     phi_safety = -4.0 * float(danger[py, px]) if in_danger else 0.0
     phi_hunt = 0.0
     if not in_danger:
-        if len(pu_xs) > 0:
-            phi_hunt += (15.0 - min(int(np.min(dist[pu_ys, pu_xs])), 15)) * 0.18
-        if len(en_xs) > 0:
-            reach_en = [int(dist[ey, ex]) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0]
-            if reach_en:
-                phi_hunt += (20.0 - min(min(reach_en), 20)) * 0.15
+        if closest_pu_pos is not None:
+            phi_hunt += (15.0 - min(closest_pu_d, 15)) * 0.18
+        if bombing_sites:
+            min_bs_d = bombing_sites[0][0]
+            phi_hunt += (15.0 - min(min_bs_d, 15)) * 0.20
+        elif len(en_xs) > 0:
+            reach_en_dists = [int(dist[ey, ex]) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0]
+            if reach_en_dists:
+                phi_hunt += (20.0 - min(min(reach_en_dists), 20)) * 0.15
             else:
                 phi_hunt += (24.0 - min(int(np.min(np.abs(en_xs - px) + np.abs(en_ys - py))), 24)) * 0.08
+
+    active_bombs_count = int(np.sum(bombs))
 
     analysis: Dict[str, Any] = {
         "pos": (px, py),
@@ -405,6 +443,8 @@ def compute_bfs_features(
         "can_push_bomb_now": can_push_bomb_now,
         "push_actions": push_actions,
         "tactical_push_actions": tactical_push_actions,
+        "active_bombs_count": active_bombs_count,
+        "closest_bombing_site": bombing_sites[0] if bombing_sites else None,
     }
     return reach_map, bomb_map, phi_space + phi_safety + phi_hunt, analysis
 
@@ -430,6 +470,7 @@ def apply_tactical_shield(
         exec_action == 0
         or exec_action == 5
         or exec_action not in valid_moves
+        or (exec_action != int(analysis["escape_action"]) and exec_action not in tactical_pushes)
     ):
         exec_action = int(analysis["escape_action"])
         shield_intervened = True
@@ -472,6 +513,69 @@ def choose_bfs_fallback_action(analysis: Dict[str, Any], rng: Optional[Any] = No
     non_zero = [m for m in valid_moves if m != 0]
     choice_fn = rng.choice if rng is not None else np.random.choice
     return int(choice_fn(non_zero)) if non_zero else 0
+
+
+def compute_action_mask(analysis: Optional[Dict[str, Any]]) -> np.ndarray:
+    """Computes a boolean action mask [can_idle, can_up, can_down, can_left, can_right, can_bomb]
+
+    used by MaskablePPO to natively prevent invalid, suicidal, or blocked actions.
+    """
+    mask = np.zeros(6, dtype=bool)
+    if analysis is None:
+        mask[0] = True
+        return mask
+
+    in_danger = bool(analysis.get("in_danger", False))
+    escape_act = int(analysis.get("escape_action", 0))
+    valid_moves = set(analysis.get("valid_moves", [0]))
+
+    if in_danger and escape_act in (1, 2, 3, 4):
+        # When in imminent explosion danger, ONLY escape actions or tactical bomb pushes are legal!
+        # Walking into walls, into other blast corridors, or standing still on a ticking bomb is suicidal.
+        mask[escape_act] = True
+        for tp in analysis.get("tactical_push_actions", []):
+            if tp in (1, 2, 3, 4):
+                mask[tp] = True
+        return mask
+
+    # Directional moves (1..4): valid if passable or valid Hammer push
+    for a in (1, 2, 3, 4):
+        mask[a] = a in valid_moves
+
+    # Action 5 (PLACE_BOMB): allowed only when safe, on board, off cooldown, and targets exist
+    can_bomb = (
+        (not in_danger)
+        and bool(analysis.get("can_place_bomb", False))
+        and bool(analysis.get("safe_escape_from_here", False))
+        and int(analysis.get("bomb_targets_here", 0)) > 0
+    )
+    mask[5] = can_bomb
+
+    # Action 0 (NONE / stay still):
+    # If open directional moves exist, disallow idle unless the agent is safely
+    # waiting out an active bomb explosion on the board.
+    # If completely boxed in (no directional moves), idle is permitted as fallback.
+    has_directional_moves = any(mask[1:5])
+    active_bombs = int(analysis.get("active_bombs_count", 0))
+    if has_directional_moves:
+        mask[0] = (not in_danger) and (active_bombs > 0)
+    else:
+        mask[0] = not in_danger
+
+    # Safety guarantee: at least one action must always be legal
+    if not np.any(mask):
+        if escape_act in (1, 2, 3, 4):
+            mask[escape_act] = True
+        elif has_directional_moves:
+            # Pick first valid directional move
+            for a in (1, 2, 3, 4):
+                if a in valid_moves:
+                    mask[a] = True
+                    break
+        else:
+            mask[0] = True
+
+    return mask
 
 
 def format_obs(

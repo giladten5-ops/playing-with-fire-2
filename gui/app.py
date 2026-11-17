@@ -64,6 +64,9 @@ class BombermanGUIApp:
         self,
         session: Optional[IGameSession] = None,
         start_in_menu: bool = True,
+        duel_mode: bool = False,
+        p1_model_path: Optional[str] = None,
+        p2_model_path: Optional[str] = None,
     ) -> None:
         pygame.display.init()
         pygame.font.init()
@@ -72,6 +75,10 @@ class BombermanGUIApp:
         self._set_window_caption(self.WINDOW_CAPTION)
         pygame.event.pump()
         self.clock = pygame.time.Clock()
+
+        self.duel_mode: bool = bool(duel_mode)
+        self.p1_model_path: str = p1_model_path or "models/v8_masked_pilot_v2/best/best_model.zip"
+        self.p2_model_path: str = p2_model_path or "models/v7_grandmaster_full/best/best_model.zip"
 
         # Wizard selections dictionary with explicit dumb_bots and trained_ai counts
         self.menu_selections: Dict[str, object] = {
@@ -130,9 +137,31 @@ class BombermanGUIApp:
         self.controller = KeyboardController()
         self.human_controller = self.controller
         self.p2_controller = Player2KeyboardController()
-        self.ai_controller = PPOAgentController(player_id=1, lazy=True)
-        self.opponent_ai_controllers: Dict[int, PPOAgentController] = {}
-        self.ai_mode = False
+        if self.duel_mode:
+            self.ai_controller = PPOAgentController(
+                player_id=1, model_path=self.p1_model_path, lazy=False
+            )
+            self.p2_ai_controller = PPOAgentController(
+                player_id=2, model_path=self.p2_model_path, lazy=False
+            )
+            self.opponent_ai_controllers: Dict[int, PPOAgentController] = {2: self.p2_ai_controller}
+            self.ai_mode = True
+            self.menu_selections["humans"] = 1
+            self.menu_selections["dumb_bots"] = 0
+            self.menu_selections["trained_ai"] = 1
+            self.menu_selections["opponents"] = 1
+            self.num_human = 1
+            self.num_dumb_bots = 0
+            self.num_trained_ai = 1
+            self.num_bots = 1
+            self.menu_state = self.PLAYING
+            self._set_window_caption("Playing with Fire 2 — AI DUEL: v8 (Masked PPO) vs v7 (Grandmaster)")
+            self.start_game()
+        else:
+            self.ai_controller = PPOAgentController(player_id=1, lazy=True)
+            self.p2_ai_controller = None
+            self.opponent_ai_controllers: Dict[int, PPOAgentController] = {}
+            self.ai_mode = False
         self.debug_mode = False
 
         self.accumulator = 0.0
@@ -504,17 +533,23 @@ class BombermanGUIApp:
         self.num_trained_ai = max(0, min(max_opponents - self.num_dumb_bots, int(self.num_trained_ai)))
         self.num_bots = self.num_dumb_bots + self.num_trained_ai
 
-        if self.num_trained_ai > 0 or self.ai_mode:
+        if self.duel_mode:
             self.ai_controller.ensure_model_loaded()
+            if getattr(self, "p2_ai_controller", None) is not None:
+                self.p2_ai_controller.ensure_model_loaded()
+                self.opponent_ai_controllers = {2: self.p2_ai_controller}
+        else:
+            if self.num_trained_ai > 0 or self.ai_mode:
+                self.ai_controller.ensure_model_loaded()
 
-        self.opponent_ai_controllers.clear()
-        for pid in range(self.num_human + 1, self.num_human + self.num_trained_ai + 1):
-            self.opponent_ai_controllers[pid] = PPOAgentController(
-                player_id=pid,
-                shared_model=self.ai_controller.model,
-                expected_channels=self.ai_controller.expected_channels,
-                lazy=True,
-            )
+            self.opponent_ai_controllers.clear()
+            for pid in range(self.num_human + 1, self.num_human + self.num_trained_ai + 1):
+                self.opponent_ai_controllers[pid] = PPOAgentController(
+                    player_id=pid,
+                    shared_model=self.ai_controller.model,
+                    expected_channels=self.ai_controller.expected_channels,
+                    lazy=True,
+                )
 
         self._refresh_session_signatures()
         kwargs: Dict[str, object] = {
@@ -529,11 +564,12 @@ class BombermanGUIApp:
         self.board_renderer.invalidate_board_cache()
 
     def start_game(self) -> None:
-        self.num_human = int(self.menu_selections.get("humans", self.num_human))
-        self.num_dumb_bots = int(self.menu_selections.get("dumb_bots", self.num_dumb_bots))
-        self.num_trained_ai = int(self.menu_selections.get("trained_ai", self.num_trained_ai))
-        self.num_bots = self.num_dumb_bots + self.num_trained_ai
-        self.menu_selections["opponents"] = self.num_bots
+        if not self.duel_mode:
+            self.num_human = int(self.menu_selections.get("humans", self.num_human))
+            self.num_dumb_bots = int(self.menu_selections.get("dumb_bots", self.num_dumb_bots))
+            self.num_trained_ai = int(self.menu_selections.get("trained_ai", self.num_trained_ai))
+            self.num_bots = self.num_dumb_bots + self.num_trained_ai
+            self.menu_selections["opponents"] = self.num_bots
 
         self._reset_session()
         self.ai_controller.reset()

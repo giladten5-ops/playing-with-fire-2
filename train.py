@@ -44,6 +44,11 @@ from stable_baselines3.common.callbacks import BaseCallback, CallbackList, Check
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.buffers import MaskableRolloutBuffer
+from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+
 import bomberman_engine as bme
 from bomberman_env import BombermanCNN, BombermanEnv
 
@@ -278,12 +283,26 @@ def main() -> None:
         action="store_true",
         help="Disable Self-Play AI opponents even when --resume is provided.",
     )
+    parser.add_argument(
+        "--mask-actions",
+        dest="mask_actions",
+        action="store_true",
+        default=True,
+        help="Enable Invalid Action Masking via sb3_contrib.MaskablePPO (default: True).",
+    )
+    parser.add_argument(
+        "--no-mask-actions",
+        dest="mask_actions",
+        action="store_false",
+        help="Disable action masking and train with standard PPO.",
+    )
     parser.add_argument("--run-name", type=str, default=None, help="Run directory name under models/.")
     parser.add_argument("--export-gui", action="store_true", default=True, help="Export best/final model to GUI default paths.")
     args = parser.parse_args()
 
     timesteps = 150000 if (args.pilot and args.timesteps == 1500000) else args.timesteps
-    run_name = args.run_name or ("v4_pilot_150k" if args.pilot else f"v4_full_{timesteps // 1000}k")
+    algo_tag = "v8_masked" if args.mask_actions else "v8_unmasked"
+    run_name = args.run_name or (f"{algo_tag}_pilot" if args.pilot else f"{algo_tag}_{timesteps // 1000}k")
     run_dir = os.path.join("models", run_name)
     ckpt_dir = os.path.join(run_dir, "checkpoints")
     best_dir = os.path.join(run_dir, "best")
@@ -294,6 +313,11 @@ def main() -> None:
     sp_model_path: Optional[str] = None
     if not args.no_self_play:
         candidate_sp = args.self_play_model or args.resume
+        if candidate_sp is None:
+            # Generation-2: Default to Grandmaster model if available
+            default_gm = "models/v7_grandmaster_full/best/best_model.zip"
+            if os.path.exists(default_gm):
+                candidate_sp = default_gm
         if candidate_sp and os.path.exists(candidate_sp):
             # Copy frozen snapshot into run_dir so Self-Play opponent stays stable even if source is overwritten
             frozen_sp_path = os.path.join(run_dir, "frozen_opponent.zip")
@@ -324,37 +348,74 @@ def main() -> None:
         normalize_images=False,
     )
 
-    if args.resume and os.path.exists(args.resume):
-        print(f"🔄 Resuming PPO training from checkpoint: {args.resume}", flush=True)
-        model = PPO.load(
-            args.resume,
-            env=env,
-            device="cpu",
-            custom_objects={
-                "BombermanCNN": BombermanCNN,
-                "learning_rate": linear_schedule(2.0e-4, 4.0e-5),
-            },
-            seed=args.seed,
-            verbose=0,
-        )
+    if args.mask_actions:
+        if args.resume and os.path.exists(args.resume):
+            print(f"🔄 Resuming MaskablePPO training from checkpoint: {args.resume}", flush=True)
+            model = MaskablePPO.load(
+                args.resume,
+                env=env,
+                device="cpu",
+                custom_objects={
+                    "BombermanCNN": BombermanCNN,
+                    "policy_class": MaskableActorCriticPolicy,
+                    "rollout_buffer_class": MaskableRolloutBuffer,
+                    "learning_rate": linear_schedule(2.0e-4, 4.0e-5),
+                },
+                seed=args.seed,
+                verbose=0,
+            )
+        else:
+            model = MaskablePPO(
+                MaskableActorCriticPolicy,
+                env,
+                policy_kwargs=policy_kwargs,
+                learning_rate=linear_schedule(3.0e-4, 4.0e-5),
+                n_steps=512,
+                batch_size=256,
+                n_epochs=4,
+                ent_coef=0.02,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                max_grad_norm=0.5,
+                device="cpu",
+                seed=args.seed,
+                verbose=0,
+            )
+        eval_cb_cls = MaskableEvalCallback
     else:
-        model = PPO(
-            "CnnPolicy",
-            env,
-            policy_kwargs=policy_kwargs,
-            learning_rate=linear_schedule(3.0e-4, 4.0e-5),
-            n_steps=512,
-            batch_size=256,
-            n_epochs=4,
-            ent_coef=0.02,
-            gamma=0.99,
-            gae_lambda=0.95,
-            clip_range=0.2,
-            max_grad_norm=0.5,
-            device="cpu",
-            seed=args.seed,
-            verbose=0,
-        )
+        if args.resume and os.path.exists(args.resume):
+            print(f"🔄 Resuming PPO training from checkpoint: {args.resume}", flush=True)
+            model = PPO.load(
+                args.resume,
+                env=env,
+                device="cpu",
+                custom_objects={
+                    "BombermanCNN": BombermanCNN,
+                    "learning_rate": linear_schedule(2.0e-4, 4.0e-5),
+                },
+                seed=args.seed,
+                verbose=0,
+            )
+        else:
+            model = PPO(
+                "CnnPolicy",
+                env,
+                policy_kwargs=policy_kwargs,
+                learning_rate=linear_schedule(3.0e-4, 4.0e-5),
+                n_steps=512,
+                batch_size=256,
+                n_epochs=4,
+                ent_coef=0.02,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                max_grad_norm=0.5,
+                device="cpu",
+                seed=args.seed,
+                verbose=0,
+            )
+        eval_cb_cls = EvalCallback
 
     save_freq_per_env = max(1, (25000 if args.pilot else 100000) // args.n_envs)
     eval_freq_per_env = max(1, (25000 if args.pilot else 75000) // args.n_envs)
@@ -362,10 +423,10 @@ def main() -> None:
     ckpt_cb = CheckpointCallback(
         save_freq=save_freq_per_env,
         save_path=ckpt_dir,
-        name_prefix=f"ppo_{run_name}",
+        name_prefix=f"{'maskable_ppo' if args.mask_actions else 'ppo'}_{run_name}",
         save_replay_buffer=False,
     )
-    eval_cb = EvalCallback(
+    eval_cb = eval_cb_cls(
         eval_env,
         best_model_save_path=best_dir,
         log_path=run_dir,
@@ -384,9 +445,10 @@ def main() -> None:
 
     callbacks = CallbackList([ckpt_cb, eval_cb, metrics_cb])
 
+    algo_name = "MaskablePPO" if args.mask_actions else "PPO"
     print(
-        f"🚀 STARTING PPO TRAINING [{run_name}] — {timesteps:,} timesteps | "
-        f"{args.n_envs} envs ({args.vec_env.upper()}) | Seed={args.seed} | WSL Low-RAM Safe Mode",
+        f"🚀 STARTING {algo_name.upper()} TRAINING [{run_name}] — {timesteps:,} timesteps | "
+        f"{args.n_envs} envs ({args.vec_env.upper()}) | Seed={args.seed} | ActionMasking={'ON' if args.mask_actions else 'OFF'} | WSL Low-RAM Safe Mode",
         flush=True,
     )
     t0 = time.perf_counter()

@@ -139,7 +139,12 @@ def evaluate_scenario(
         ep_reward = 0.0
         while not done:
             if model is not None:
-                action, _ = model.predict(obs, deterministic=deterministic)
+                try:
+                    action, _ = model.predict(
+                        obs, action_masks=env.action_masks(), deterministic=deterministic
+                    )
+                except TypeError:
+                    action, _ = model.predict(obs, deterministic=deterministic)
                 raw_action = int(action)
             else:
                 raw_action = choose_bfs_fallback_action(env._cached_analysis)
@@ -195,14 +200,23 @@ def evaluate_model_suite(
     if model_path is not None:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
-        model = PPO.load(
-            model_path,
-            device="cpu",
-            custom_objects={"BombermanCNN": BombermanCNN},
-        )
+        try:
+            from sb3_contrib import MaskablePPO
+            model = MaskablePPO.load(
+                model_path,
+                device="cpu",
+                custom_objects={"BombermanCNN": BombermanCNN},
+            )
+        except Exception:
+            model = PPO.load(
+                model_path,
+                device="cpu",
+                custom_objects={"BombermanCNN": BombermanCNN},
+            )
 
+    algo_name = type(model).__name__ if model is not None else "Pure BFS"
     title = (
-        f"PPO Model ({model_path}) [Shield={'ON' if tactical_shield else 'OFF'}]"
+        f"{algo_name} Model ({model_path}) [Shield={'ON' if tactical_shield else 'OFF'}]"
         if model_path
         else f"Pure BFS Heuristic Baseline [Shield={'ON' if tactical_shield else 'OFF'}]"
     )

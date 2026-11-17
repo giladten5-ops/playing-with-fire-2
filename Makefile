@@ -54,7 +54,7 @@ MAIN_OBJ     := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(MAIN_SRC))
 
 ALL_DEPS := $(ENGINE_OBJS:.o=.d) $(BINDING_OBJ:.o=.d) $(MAIN_OBJ:.o=.d)
 
-.PHONY: all build run play test train console clean rebuild help
+.PHONY: all build run play duel test train console clean rebuild help
 
 # Default target: build the C++ Pybind11 engine module
 all: build
@@ -78,6 +78,10 @@ run: $(TARGET_SO)
 	$(PYTHON) play_gui.py
 
 play: run
+
+# Launch Pygame GUI directly in 1v1 AI Duel mode: v8 (Masked PPO) vs v7 (Grandmaster)
+duel: $(TARGET_SO)
+	$(PYTHON) play_gui.py --duel
 
 # Build (if needed) and run the test suite
 test: $(TARGET_SO)

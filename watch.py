@@ -24,13 +24,29 @@ def render_board(obs):
 
 if __name__ == "__main__":
     env = BombermanEnv()
-    try: model = PPO.load("models/v3_best/best_model", custom_objects={"BombermanCNN": BombermanCNN})
-    except: model = PPO.load("models/ppo_grandmaster_v3", custom_objects={"BombermanCNN": BombermanCNN})
+    model = None
+    for path in ["models/v3_best/best_model", "models/ppo_grandmaster_v3"]:
+        try:
+            from sb3_contrib import MaskablePPO
+            model = MaskablePPO.load(path, custom_objects={"BombermanCNN": BombermanCNN})
+            break
+        except Exception:
+            try:
+                model = PPO.load(path, custom_objects={"BombermanCNN": BombermanCNN})
+                break
+            except Exception:
+                continue
     obs, _ = env.reset()
     done = False
     while not done:
         print("\033[H\033[J", end="")
-        action, _ = model.predict(obs, deterministic=True)
+        if model is not None:
+            try:
+                action, _ = model.predict(obs, action_masks=env.action_masks(), deterministic=True)
+            except TypeError:
+                action, _ = model.predict(obs, deterministic=True)
+        else:
+            action = 0
         obs, rew, term, trunc, _ = env.step(action)
         done = term or trunc
         render_board(obs)
