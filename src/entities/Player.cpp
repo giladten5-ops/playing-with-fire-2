@@ -28,6 +28,8 @@ int Player::getFacingDx() const { return m_facingDx; }
 int Player::getFacingDy() const { return m_facingDy; }
 bool Player::hasHammer() const { return m_hasHammer; }
 bool Player::hasRing() const { return m_hasRing; }
+bool Player::isInSuddenDeath() const { return m_inSuddenDeath; }
+int Player::getSuddenDeathTimer() const { return m_suddenDeathTimer; }
 
 bool Player::isBot() const { return false; }
 std::string Player::getDisplayName() const { return "P" + std::to_string(m_id); }
@@ -66,6 +68,29 @@ void Player::onExplosionHit(World& /*world*/, bool bypassInvincibility) {
     }
 }
 
+void Player::updateSuddenDeathStatus(World& world) {
+    if (!isAlive()) return;
+
+    if (world.isSuddenDeathTile(getX(), getY())) {
+        if (!m_inSuddenDeath) {
+            m_inSuddenDeath = true;
+            m_suddenDeathTimer = SUDDEN_DEATH_DAMAGE_INTERVAL_TICKS;
+            onExplosionHit(world, true);
+        } else {
+            if (m_suddenDeathTimer > 0) {
+                m_suddenDeathTimer--;
+            }
+            if (m_suddenDeathTimer <= 0) {
+                m_suddenDeathTimer = SUDDEN_DEATH_DAMAGE_INTERVAL_TICKS;
+                onExplosionHit(world, true);
+            }
+        }
+    } else {
+        m_inSuddenDeath = false;
+        m_suddenDeathTimer = 0;
+    }
+}
+
 void Player::tryPlaceOrPushBomb(World& world) {
     int cx = getX();
     int cy = getY();
@@ -83,7 +108,7 @@ void Player::tryPlaceOrPushBomb(World& world) {
 }
 
 void Player::tryMove(int targetX, int targetY, World& world) {
-    bool canMove = world.isTileFree(targetX, targetY);
+    bool canMove = world.canPlayerMoveTo(getX(), getY(), targetX, targetY);
 
     if (!canMove && world.isPositionValid(targetX, targetY)) {
         auto entities = world.getEntitiesAt(targetX, targetY);
@@ -102,7 +127,9 @@ void Player::tryMove(int targetX, int targetY, World& world) {
             }
         }
 
-        if (m_hasRing && world.getBoard().getCellType(targetX, targetY) == CellType::EMPTY) {
+        bool passableCell = (world.getBoard().getCellType(targetX, targetY) == CellType::EMPTY) ||
+                            (world.isSuddenDeathTile(getX(), getY()) && world.isSuddenDeathTile(targetX, targetY));
+        if (m_hasRing && passableCell) {
             canMove = true;
             for (auto* e : entities) {
                 if (e->isAlive() && e->isSolid() && e->getType() != EntityType::BOMB) {

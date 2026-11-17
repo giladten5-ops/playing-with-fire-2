@@ -6,6 +6,8 @@
 #include <ctime>
 #include "../../include/core/Game.h"
 #include "../../include/levels/ClassicLevel.h"
+#include "../../include/factories/PowerUpFactory.h"
+#include "../../include/entities/DumbBot.h"
 
 namespace py = pybind11;
 
@@ -17,6 +19,16 @@ PYBIND11_MODULE(bomberman_engine, m) {
     m.def("seed_rng", [](unsigned int seed) {
         std::srand(seed);
     }, "Seeds the C++ rand() generator for reproducible level generation");
+
+    m.def("set_powerup_drop_chance", &PowerUpFactory::setDropChancePercent, py::arg("percent"),
+          "Sets the percentage chance (0-100) that a destroyed breakable wall drops a power-up");
+    m.def("get_powerup_drop_chance", &PowerUpFactory::getDropChancePercent,
+          "Gets the percentage chance (0-100) that a destroyed breakable wall drops a power-up");
+
+    m.def("set_bot_sd_caution_percent", &DumbBot::setSuddenDeathCautionPercent, py::arg("percent"),
+          "Sets the base caution probability (0-100) for DumbBot Sudden Death awareness");
+    m.def("get_bot_sd_caution_percent", &DumbBot::getSuddenDeathCautionPercent,
+          "Gets the base caution probability (0-100) for DumbBot Sudden Death awareness");
 
     py::enum_<Command>(m, "Command")
         .value("NONE", Command::NONE)
@@ -87,7 +99,8 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("x", &FlameInfo::x)
         .def_readonly("y", &FlameInfo::y)
         .def_readonly("timer", &FlameInfo::timer)
-        .def_readonly("ownerId", &FlameInfo::ownerId);
+        .def_readonly("ownerId", &FlameInfo::ownerId)
+        .def_readonly("creditOwnerId", &FlameInfo::creditOwnerId);
 
     py::class_<ILevel>(m, "ILevel");
     py::class_<ClassicLevel, ILevel>(m, "ClassicLevel")

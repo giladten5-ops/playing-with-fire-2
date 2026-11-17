@@ -716,6 +716,157 @@ class TestGUIArchitecture(unittest.TestCase):
         _, rew_intervened, _, _, _ = env_shield.step(1)
         self.assertEqual(env_shield.ep_stats["shield_interventions"], 1)
 
+    def test_gameplay_improvements_and_sudden_death_rework(self) -> None:
+        """Verify bomb planter flame color vs pusher kill credit, pushed bombs passing through flames,
+        30% configurable power-up drop rate, gradual Sudden Death damage (-1 HP + 5s/150 ticks),
+        Sudden Death movement rules, and DumbBot imperfect Sudden Death caution."""
+        import bomberman_engine as bme
+
+        # 1. Bomb Ownership & Flame Color vs Pusher AI Kill Credit
+        game = bme.Game(13, 13)
+        game.clearBoard()
+        game.addPlayer(2, 2, 1, False)  # P1 (pusher)
+        game.addPlayer(3, 2, 2, False)  # P2 (planter)
+        game.addPlayer(5, 2, 3, False)  # P3 (victim with 1 HP left)
+        game.givePlayerPowerUp(1, "H")
+
+        # Reduce P3 to 1 HP first so a single hit kills P3
+        game.addBomb(5, 3, 1, 1, 2)
+        game.step(1, bme.Command.NONE)
+        for _ in range(65):
+            game.step(1, bme.Command.NONE)
+        game.addBomb(5, 3, 1, 1, 2)
+        game.step(1, bme.Command.NONE)
+        for _ in range(65):
+            game.step(1, bme.Command.NONE)
+        self.assertEqual(game.getPlayerInfo(3).lives, 1)
+
+        # P2 plants a bomb at (3, 2), then moves down to (3, 3) out of the way
+        game.addBomb(3, 2, 12, 2, 2)
+        game.updateCommands([bme.PlayerCommand(2, bme.Command.DOWN)])
+        self.assertEqual((game.getPlayerInfo(2).x, game.getPlayerInfo(2).y), (3, 3))
+
+        # P1 at (2, 2) pushes P2's bomb at (3, 2) RIGHT toward P3 at (5, 2)
+        res_push = game.step(1, bme.Command.RIGHT)
+        self.assertTrue(res_push.bombPushed)
+        bombs = game.getBombs()
+        self.assertEqual(len(bombs), 1)
+        self.assertEqual(bombs[0].ownerId, 2, "Bomb ownerId must remain the original planter (P2)")
+        self.assertEqual(bombs[0].creditOwnerId, 1, "Bomb creditOwnerId must update to the pusher (P1)")
+
+        # Step until bomb explodes; verify flames have ownerId == 2 (planter color) and creditOwnerId == 1 (pusher kill)
+        total_kills_p1 = 0
+        flames_checked = False
+        for _ in range(15):
+            res = game.step(1, bme.Command.NONE)
+            total_kills_p1 += res.enemiesKilled
+            flames = game.getFlames()
+            if flames:
+                flames_checked = True
+                for f in flames:
+                    self.assertEqual(f.ownerId, 2, "Flame visual ownerId must always be the bomb planter (P2)")
+                    self.assertEqual(f.creditOwnerId, 1, "Flame creditOwnerId must be the pusher (P1)")
+        self.assertTrue(flames_checked)
+        self.assertEqual(total_kills_p1, 1, "Pusher (P1) must receive the enemy kill credit for AI training")
+
+        # 2. Pushed Bombs Travel Through Existing Flames
+        game.clearBoard()
+        game.addPlayer(1, 2, 1, False)
+        game.addPlayer(11, 11, 2, False)
+        game.givePlayerPowerUp(1, "H")
+        # Create an explosion at (4, 1) so (4, 2) has a live flame for 30 ticks
+        game.addBomb(4, 1, 1, 2, 2)
+        game.step(1, bme.Command.NONE)
+        flame_coords = {(f.x, f.y) for f in game.getFlames()}
+        self.assertIn((4, 2), flame_coords)
+
+        # Place a bomb at (2, 2) with long timer and have P1 at (1, 2) push it RIGHT through the flame at (4, 2)
+        game.addBomb(2, 2, 80, 2, 2)
+        res_kick = game.step(1, bme.Command.RIGHT)
+        self.assertTrue(res_kick.bombPushed, "Pushing a bomb toward a flame must succeed")
+        for _ in range(16):
+            game.step(1, bme.Command.NONE)
+        sliding_bombs = game.getBombs()
+        self.assertEqual(len(sliding_bombs), 1, "Sliding bomb must not detonate when passing through a flame")
+        self.assertGreater(sliding_bombs[0].x, 4, "Sliding bomb must travel past the flame at x=4")
+
+        # 3. Configurable Power-Up Drop Rate (30% default)
+        self.assertEqual(bme.get_powerup_drop_chance(), 30)
+        bme.seed_rng(12345)
+        game.clearBoard()
+        game.addPlayer(0, 0, 1, False)
+        game.addPlayer(12, 12, 2, False)
+        bme.set_powerup_drop_chance(0)
+        game.addBreakableWall(2, 2)
+        game.addBomb(2, 1, 1, 2, 1)
+        game.step(1, bme.Command.NONE)
+        self.assertEqual(len(game.getPowerUps()), 0, "0% drop chance must never spawn a power-up")
+
+        bme.set_powerup_drop_chance(100)
+        game.addBreakableWall(3, 2)
+        game.addBomb(3, 1, 1, 2, 1)
+        game.step(1, bme.Command.NONE)
+        self.assertEqual(len(game.getPowerUps()), 1, "100% drop chance must always spawn a power-up")
+        bme.set_powerup_drop_chance(30)
+
+        # 4. Sudden Death Gradual Damage (-1 HP on contact, -1 HP every 150 ticks / 5s) & Movement Rules
+        game.clearBoard()
+        game.addPlayer(0, 0, 1, False)  # P1 at (0, 0) where first Sudden Death tile drops
+        game.addPlayer(6, 6, 2, False)
+        game.setSuddenDeathTimer(0)
+
+        # Tick 1: Sudden Death drops at (0, 0), catching P1 -> -1 HP on first contact (3 -> 2 HP)
+        game.step(1, bme.Command.NONE)
+        p1 = game.getPlayerInfo(1)
+        self.assertTrue(p1.isAlive)
+        self.assertEqual(p1.lives, 2, "First contact with Sudden Death must deal exactly 1 HP damage")
+        self.assertEqual(game.getBoardGrid()[0][0], 1, "Sudden Death tile must visually appear as SOLID_WALL (1)")
+
+        # Tick 2..150 (149 ticks): P1 stays on Sudden Death tiles (and at tick 16, (1, 0) also becomes SD)
+        # Verify P1 does NOT lose health during the 149 ticks before 5 seconds elapse
+        for t in range(149):
+            # At tick 20, move RIGHT from SD tile (0,0) onto SD tile (1,0) to verify caught player can move on SD tiles
+            cmd = bme.Command.RIGHT if t == 20 else bme.Command.NONE
+            game.step(1, cmd)
+            p1 = game.getPlayerInfo(1)
+            if t == 20:
+                self.assertEqual((p1.x, p1.y), (1, 0), "Player caught by Sudden Death must be able to move on SD tiles")
+            self.assertEqual(p1.lives, 2, f"Player must not lose extra HP before 150 ticks (failed at tick {t + 1})")
+
+        # Tick 151 (150 ticks = 5.0 seconds after first contact): P1 loses 1 HP (2 -> 1 HP)
+        game.step(1, bme.Command.NONE)
+        p1 = game.getPlayerInfo(1)
+        self.assertTrue(p1.isAlive)
+        self.assertEqual(p1.lives, 1, "Remaining on Sudden Death for 5 seconds (150 ticks) must deal 1 HP damage")
+
+        # Escape: P1 steps DOWN from SD tile (1, 0) onto safe EMPTY tile (1, 1) ( Wait for move cooldown if any )
+        while game.getPlayerInfo(1).cooldown > 0:
+            game.step(1, bme.Command.NONE)
+        game.step(1, bme.Command.DOWN)
+        p1 = game.getPlayerInfo(1)
+        self.assertEqual((p1.x, p1.y), (1, 1), "Caught player must be able to escape onto an adjacent safe tile")
+
+        # Once escaped onto safe tile (1, 1), P1 CANNOT step back UP onto SD tile (1, 0)
+        while game.getPlayerInfo(1).cooldown > 0:
+            game.step(1, bme.Command.NONE)
+        game.step(1, bme.Command.UP)
+        p1 = game.getPlayerInfo(1)
+        self.assertEqual((p1.x, p1.y), (1, 1), "Player on safe ground must NOT be able to walk onto a Sudden Death tile")
+
+        # 5. DumbBot Imperfect Sudden Death Awareness
+        self.assertEqual(bme.get_bot_sd_caution_percent(), 75)
+        bme.set_bot_sd_caution_percent(100)
+        game.clearBoard()
+        game.addPlayer(6, 6, 1, False)
+        game.addPlayer(0, 0, 2, True)  # DumbBot at (0, 0)
+        game.setSuddenDeathTimer(30)
+        for _ in range(25):
+            game.step(1, bme.Command.NONE)
+        bot_info = game.getPlayerInfo(2)
+        self.assertNotEqual((bot_info.x, bot_info.y), (0, 0), "Cautious DumbBot must retreat from imminent Sudden Death tile")
+        bme.set_bot_sd_caution_percent(75)
+
+
 
 if __name__ == "__main__":
     unittest.main()

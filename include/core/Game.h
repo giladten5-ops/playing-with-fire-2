@@ -68,6 +68,7 @@ struct FlameInfo {
     int y = 0;
     int timer = 0;
     int ownerId = -1;
+    int creditOwnerId = -1;
 };
 
 class Game {

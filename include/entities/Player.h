@@ -12,6 +12,7 @@ public:
     static constexpr int BASE_MOVE_COOLDOWN = 6;
     static constexpr int MIN_MOVE_COOLDOWN = 4;
     static constexpr int MAX_SPEED_LEVEL = 2;
+    static constexpr int SUDDEN_DEATH_DAMAGE_INTERVAL_TICKS = 150;
 
 private:
     int m_id;
@@ -25,6 +26,8 @@ private:
     int m_facingDy = 1;
     int m_lives;
     int m_invincibilityTimer;
+    bool m_inSuddenDeath = false;
+    int m_suddenDeathTimer = 0;
 
     void tryMove(int targetX, int targetY, World& world);
     void tryPlaceOrPushBomb(World& world);
@@ -49,6 +52,9 @@ public:
     bool hasHammer() const;
     bool hasRing() const;
     bool isOnCooldown() const;
+    bool isInSuddenDeath() const;
+    int getSuddenDeathTimer() const;
+    void updateSuddenDeathStatus(World& world);
 
     virtual bool isBot() const;
     virtual std::string getDisplayName() const;
