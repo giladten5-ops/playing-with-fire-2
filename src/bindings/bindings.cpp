@@ -1,5 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include "../../include/core/Game.h"
@@ -25,10 +27,16 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .value("PLACE_BOMB", Command::PLACE_BOMB)
         .export_values();
 
+    py::class_<PlayerCommand>(m, "PlayerCommand")
+        .def(py::init<int, Command>(), py::arg("playerId"), py::arg("command"))
+        .def_readwrite("playerId", &PlayerCommand::playerId)
+        .def_readwrite("command", &PlayerCommand::command);
+
     py::class_<StepResult>(m, "StepResult")
         .def_readonly("isDone", &StepResult::isDone)
         .def_readonly("reward", &StepResult::reward)
         .def_readonly("wallsDestroyed", &StepResult::wallsDestroyed)
+        .def_readonly("enemiesHit", &StepResult::enemiesHit)
         .def_readonly("enemiesKilled", &StepResult::enemiesKilled)
         .def_readonly("powerUpsCollected", &StepResult::powerUpsCollected)
         .def_readonly("livesLost", &StepResult::livesLost)
@@ -48,6 +56,7 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("bombRadius", &PlayerInfo::bombRadius)
         .def_readonly("speedLevel", &PlayerInfo::speedLevel)
         .def_readonly("cooldown", &PlayerInfo::cooldown)
+        .def_readonly("moveCooldownMax", &PlayerInfo::moveCooldownMax)
         .def_readonly("invincibilityTimer", &PlayerInfo::invincibilityTimer)
         .def_readonly("facingDx", &PlayerInfo::facingDx)
         .def_readonly("facingDy", &PlayerInfo::facingDy)
@@ -65,7 +74,20 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def_readonly("creditOwnerId", &BombInfo::creditOwnerId)
         .def_readonly("isSliding", &BombInfo::isSliding)
         .def_readonly("slideDx", &BombInfo::slideDx)
-        .def_readonly("slideDy", &BombInfo::slideDy);
+        .def_readonly("slideDy", &BombInfo::slideDy)
+        .def_readonly("slideCooldown", &BombInfo::slideCooldown)
+        .def_readonly("slideCooldownMax", &BombInfo::slideCooldownMax);
+
+    py::class_<PowerUpInfo>(m, "PowerUpInfo")
+        .def_readonly("x", &PowerUpInfo::x)
+        .def_readonly("y", &PowerUpInfo::y)
+        .def_readonly("type", &PowerUpInfo::type);
+
+    py::class_<FlameInfo>(m, "FlameInfo")
+        .def_readonly("x", &FlameInfo::x)
+        .def_readonly("y", &FlameInfo::y)
+        .def_readonly("timer", &FlameInfo::timer)
+        .def_readonly("ownerId", &FlameInfo::ownerId);
 
     py::class_<ILevel>(m, "ILevel");
     py::class_<ClassicLevel, ILevel>(m, "ClassicLevel")
@@ -78,11 +100,27 @@ PYBIND11_MODULE(bomberman_engine, m) {
     py::class_<Game>(m, "Game")
         .def(py::init<int, int>())
         .def("reset", &Game::reset)
-        .def("step", &Game::step)
+        .def("step", &Game::step,
+             py::arg("playerId"),
+             py::arg("action"),
+             py::arg("extraCommands") = std::vector<PlayerCommand>{})
         .def("update", py::overload_cast<Command>(&Game::update), py::arg("command") = Command::NONE)
-        .def("getState", &Game::getState)
+        .def("updateCommands", py::overload_cast<const std::vector<PlayerCommand>&>(&Game::update), py::arg("commands"))
+        .def("getState", [](const Game& self, int playerId) {
+            const int width = self.getWorld().getBoard().getWidth();
+            const int height = self.getWorld().getBoard().getHeight();
+            constexpr int channels = 10;
+            py::array_t<float> result({channels, height, width});
+            float* ptr = static_cast<float*>(result.request().ptr);
+            std::fill(ptr, ptr + (channels * height * width), 0.0f);
+            self.fillState(playerId, ptr);
+            return result;
+        }, py::arg("playerId"))
+        .def("getBoardGrid", &Game::getBoardGrid)
         .def("getPlayerInfo", &Game::getPlayerInfo)
         .def("getBombs", &Game::getBombs)
+        .def("getPowerUps", &Game::getPowerUps)
+        .def("getFlames", &Game::getFlames)
         .def("clearBoard", &Game::clearBoard)
         .def("setSolidWall", &Game::setSolidWall)
         .def("addPlayer", &Game::addPlayer, py::arg("x"), py::arg("y"), py::arg("id"), py::arg("isBot") = false)
@@ -93,5 +131,6 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("isGameOver", &Game::isGameOver)
         .def("getWinnerId", &Game::getWinnerId)
         .def("getSuddenDeathTimer", &Game::getSuddenDeathTimer)
+        .def("setSuddenDeathTimer", &Game::setSuddenDeathTimer)
         .def("isSuddenDeathActive", &Game::isSuddenDeathActive);
 }

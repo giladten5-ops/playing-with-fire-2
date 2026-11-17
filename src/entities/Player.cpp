@@ -19,6 +19,10 @@ int Player::getMaxBombs() const { return m_maxBombs; }
 int Player::getBombRadius() const { return m_bombRadius; }
 int Player::getSpeedLevel() const { return m_speedLevel; }
 int Player::getCooldown() const { return m_cooldown; }
+int Player::getMoveCooldownMax() const {
+    int cd = BASE_MOVE_COOLDOWN - m_speedLevel;
+    return cd < MIN_MOVE_COOLDOWN ? MIN_MOVE_COOLDOWN : cd;
+}
 int Player::getInvincibilityTimer() const { return m_invincibilityTimer; }
 int Player::getFacingDx() const { return m_facingDx; }
 int Player::getFacingDy() const { return m_facingDy; }
@@ -46,9 +50,15 @@ void Player::update(World& /*world*/) {
     if (m_invincibilityTimer > 0) m_invincibilityTimer--;
 }
 
-void Player::onExplosionHit(World& /*world*/) {
-    if (m_invincibilityTimer > 0) return;
-    m_lives--;
+void Player::onExplosionHit(World& world) {
+    onExplosionHit(world, false);
+}
+
+void Player::onExplosionHit(World& /*world*/, bool bypassInvincibility) {
+    if (!bypassInvincibility && m_invincibilityTimer > 0) return;
+    if (m_lives > 0) {
+        m_lives--;
+    }
     if (m_lives > 0) {
         m_invincibilityTimer = INVINCIBILITY_FRAMES;
     } else {
@@ -60,35 +70,14 @@ void Player::tryPlaceOrPushBomb(World& world) {
     int cx = getX();
     int cy = getY();
 
-    // Standing on a bomb: do nothing (neither place duplicate bomb nor push from on top)
+    // Standing on a bomb: do nothing (do not place duplicate bomb on the same tile)
     for (auto* e : world.getEntitiesAt(cx, cy)) {
         if (e->isAlive() && e->getType() == EntityType::BOMB) {
             return;
         }
     }
 
-    bool pushedBomb = false;
-
-    if (m_hasHammer && (m_facingDx != 0 || m_facingDy != 0)) {
-        int checkX = cx + m_facingDx;
-        int checkY = cy + m_facingDy;
-        int destX = checkX + m_facingDx;
-        int destY = checkY + m_facingDy;
-
-        if (Bomb::canSlideTo(world, destX, destY)) {
-            auto entitiesInFront = world.getEntitiesAt(checkX, checkY);
-            for (auto* e : entitiesInFront) {
-                if (!e->isAlive()) continue;
-                if (auto* pushable = dynamic_cast<IPushable*>(e)) {
-                    pushable->push(m_facingDx, m_facingDy, m_id);
-                    pushedBomb = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (!pushedBomb && canPlaceBomb(world)) {
+    if (canPlaceBomb(world)) {
         world.addEntity(std::make_unique<Bomb>(cx, cy, DEFAULT_BOMB_TIMER, m_bombRadius, m_id));
     }
 }
@@ -96,10 +85,25 @@ void Player::tryPlaceOrPushBomb(World& world) {
 void Player::tryMove(int targetX, int targetY, World& world) {
     bool canMove = world.isTileFree(targetX, targetY);
 
-    if (!canMove && m_hasRing && world.isPositionValid(targetX, targetY)) {
-        if (world.getBoard().getCellType(targetX, targetY) != CellType::SOLID_WALL) {
+    if (!canMove && world.isPositionValid(targetX, targetY)) {
+        auto entities = world.getEntitiesAt(targetX, targetY);
+
+        if (m_hasHammer && (m_facingDx != 0 || m_facingDy != 0)) {
+            int destX = targetX + m_facingDx;
+            int destY = targetY + m_facingDy;
+            if (Bomb::canSlideTo(world, destX, destY)) {
+                for (auto* e : entities) {
+                    if (!e->isAlive()) continue;
+                    if (auto* pushable = dynamic_cast<IPushable*>(e)) {
+                        pushable->push(m_facingDx, m_facingDy, m_id);
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (m_hasRing && world.getBoard().getCellType(targetX, targetY) == CellType::EMPTY) {
             canMove = true;
-            auto entities = world.getEntitiesAt(targetX, targetY);
             for (auto* e : entities) {
                 if (e->isAlive() && e->isSolid() && e->getType() != EntityType::BOMB) {
                     canMove = false;
@@ -112,7 +116,7 @@ void Player::tryMove(int targetX, int targetY, World& world) {
     if (canMove) {
         setX(targetX);
         setY(targetY);
-        m_cooldown = BASE_MOVE_COOLDOWN - (m_speedLevel * 2);
+        m_cooldown = getMoveCooldownMax();
     }
 }
 
@@ -139,23 +143,12 @@ void Player::handleCommand(Command command, World& world) {
     int targetX = cx + newDx;
     int targetY = cy + newDy;
 
-    bool wasFacingTarget = (m_facingDx == newDx && m_facingDy == newDy);
-    m_facingDx = newDx;
-    m_facingDy = newDy;
-
     if (isOnCooldown()) {
         return;
     }
 
-    // If a bomb is in the target tile and the player wasn't facing it yet,
-    // rotate in place first without stepping onto the bomb.
-    if (m_hasRing && m_hasHammer && !wasFacingTarget && !isBot() && world.isPositionValid(targetX, targetY)) {
-        for (auto* e : world.getEntitiesAt(targetX, targetY)) {
-            if (e->isAlive() && e->getType() == EntityType::BOMB) {
-                return;
-            }
-        }
-    }
+    m_facingDx = newDx;
+    m_facingDy = newDy;
 
     tryMove(targetX, targetY, world);
 }

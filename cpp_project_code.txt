@@ -1,0 +1,3659 @@
+================================================================================
+PLAYING WITH FIRE 2 - C++ CODEBASE EXPORT
+Total C++ Files: 50
+================================================================================
+
+TABLE OF CONTENTS:
+   1. include/core/Board.h
+   2. include/core/ConsoleInput.h
+   3. include/core/ConsoleRenderer.h
+   4. include/core/Game.h
+   5. include/core/World.h
+   6. include/entities/Bomb.h
+   7. include/entities/BombPowerUp.h
+   8. include/entities/BreakableWall.h
+   9. include/entities/DumbBot.h
+  10. include/entities/Entity.h
+  11. include/entities/Flame.h
+  12. include/entities/HammerPowerUp.h
+  13. include/entities/LightningPowerUp.h
+  14. include/entities/Player.h
+  15. include/entities/PowerUp.h
+  16. include/entities/RingPowerUp.h
+  17. include/entities/SpeedPowerUp.h
+  18. include/factories/PowerUpFactory.h
+  19. include/interfaces/IInput.h
+  20. include/interfaces/ILevel.h
+  21. include/interfaces/IPushable.h
+  22. include/interfaces/IRenderer.h
+  23. include/levels/ClassicLevel.h
+  24. include/systems/CollisionSystem.h
+  25. include/systems/ExplosionSystem.h
+  26. include/systems/SuddenDeathSystem.h
+  27. src/bindings/bindings.cpp
+  28. src/core/Board.cpp
+  29. src/core/ConsoleInput.cpp
+  30. src/core/ConsoleRenderer.cpp
+  31. src/core/Game.cpp
+  32. src/core/World.cpp
+  33. src/entities/Bomb.cpp
+  34. src/entities/BombPowerUp.cpp
+  35. src/entities/BreakableWall.cpp
+  36. src/entities/DumbBot.cpp
+  37. src/entities/Entity.cpp
+  38. src/entities/Flame.cpp
+  39. src/entities/HammerPowerUp.cpp
+  40. src/entities/LightningPowerUp.cpp
+  41. src/entities/Player.cpp
+  42. src/entities/PowerUp.cpp
+  43. src/entities/RingPowerUp.cpp
+  44. src/entities/SpeedPowerUp.cpp
+  45. src/factories/PowerUpFactory.cpp
+  46. src/levels/ClassicLevel.cpp
+  47. src/main.cpp
+  48. src/systems/CollisionSystem.cpp
+  49. src/systems/ExplosionSystem.cpp
+  50. src/systems/SuddenDeathSystem.cpp
+
+================================================================================
+
+================================================================================
+FILE: Makefile (C++ Build Configuration)
+================================================================================
+# ==============================================================================
+# Playing With Fire 2 — Build & Run Makefile
+# ==============================================================================
+
+# Automatically prefer the project virtualenv Python if it exists
+ifneq ($(wildcard ./venv/bin/python),)
+    PYTHON ?= ./venv/bin/python
+else
+    PYTHON ?= python3
+endif
+
+CXX      ?= g++
+CXXFLAGS ?= -O3 -Wall -std=c++17 -fPIC -Iinclude -MMD -MP
+
+# Query pybind11 include flags and extension suffix from the active Python
+PYBIND_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
+EXT_SUFFIX      := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')")
+
+TARGET_SO  := bomberman_engine$(EXT_SUFFIX)
+TARGET_BIN := bomberman
+BUILD_DIR  := build
+
+# Shared C++ engine sources (used by both Python extension and console binary)
+ENGINE_SRCS := \
+	src/core/Board.cpp \
+	src/core/ConsoleInput.cpp \
+	src/core/ConsoleRenderer.cpp \
+	src/core/Game.cpp \
+	src/core/World.cpp \
+	src/entities/Entity.cpp \
+	src/entities/Player.cpp \
+	src/entities/Bomb.cpp \
+	src/entities/Flame.cpp \
+	src/entities/BreakableWall.cpp \
+	src/entities/DumbBot.cpp \
+	src/entities/PowerUp.cpp \
+	src/entities/BombPowerUp.cpp \
+	src/entities/LightningPowerUp.cpp \
+	src/entities/SpeedPowerUp.cpp \
+	src/entities/HammerPowerUp.cpp \
+	src/entities/RingPowerUp.cpp \
+	src/factories/PowerUpFactory.cpp \
+	src/levels/ClassicLevel.cpp \
+	src/systems/CollisionSystem.cpp \
+	src/systems/ExplosionSystem.cpp \
+	src/systems/SuddenDeathSystem.cpp
+
+BINDING_SRC := src/bindings/bindings.cpp
+MAIN_SRC    := src/main.cpp
+
+ENGINE_OBJS  := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(ENGINE_SRCS))
+BINDING_OBJ  := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(BINDING_SRC))
+MAIN_OBJ     := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(MAIN_SRC))
+
+ALL_DEPS := $(ENGINE_OBJS:.o=.d) $(BINDING_OBJ:.o=.d) $(MAIN_OBJ:.o=.d)
+
+.PHONY: all build run play duel test train console clean rebuild help
+
+# Default target: build the C++ Pybind11 engine module
+all: build
+
+build: $(TARGET_SO)
+
+# Link the shared library for Python (bomberman_engine*.so)
+$(TARGET_SO): $(ENGINE_OBJS) $(BINDING_OBJ)
+	@echo "[Link] Creating Python C++ extension: $@"
+	$(CXX) $(CXXFLAGS) -shared $^ -o $@
+	@echo "[Done] Build complete: $@"
+
+# Compile C++ engine object files
+$(BUILD_DIR)/%.o: src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "[CXX]  $<"
+	$(CXX) $(CXXFLAGS) $(PYBIND_INCLUDES) -c $< -o $@
+
+# Build (if needed) and launch the Pygame GUI (starts in Main Menu)
+run: $(TARGET_SO)
+	$(PYTHON) play_gui.py
+
+play: run
+
+# Launch Pygame GUI directly in 1v1 AI Duel mode: v8 (Masked PPO) vs v7 (Grandmaster)
+duel: $(TARGET_SO)
+	$(PYTHON) play_gui.py --duel
+
+# Build (if needed) and run the test suite
+test: $(TARGET_SO)
+	$(PYTHON) -m unittest discover -s tests -v
+
+# Build (if needed) and run PPO RL training
+train: $(TARGET_SO)
+	$(PYTHON) train.py
+
+# Build standalone terminal/console C++ executable
+console: $(TARGET_BIN)
+
+$(TARGET_BIN): $(ENGINE_OBJS) $(MAIN_OBJ)
+	@echo "[Link] Creating console executable: $@"
+	$(CXX) $(CXXFLAGS) $^ -o $@
+	@echo "[Done] Run with ./$(TARGET_BIN)"
+
+# Remove all build artifacts
+clean:
+	@echo "[Clean] Removing build artifacts..."
+	rm -rf $(BUILD_DIR) *.o $(TARGET_BIN) bomberman_engine*.so
+	find . -maxdepth 2 -name "__pycache__" -type d -exec rm -rf {} +
+
+# Full clean + parallel rebuild
+rebuild: clean
+	$(MAKE) all
+
+help:
+	@echo "=================================================================="
+	@echo " Playing With Fire 2 — Makefile Commands"
+	@echo "=================================================================="
+	@echo "  make           Compile the C++ engine module (incremental)"
+	@echo "  make -j        Compile in parallel using all CPU cores"
+	@echo "  make run       Compile (if needed) and launch the Pygame GUI"
+	@echo "  make test      Compile (if needed) and run unit tests"
+	@echo "  make train     Compile (if needed) and start RL training"
+	@echo "  make console   Compile the standalone C++ terminal binary"
+	@echo "  make clean     Remove all compiled object files and .so binaries"
+	@echo "  make rebuild   Clean and recompile everything from scratch"
+	@echo "=================================================================="
+
+-include $(ALL_DEPS)
+
+
+================================================================================
+FILE: include/core/Board.h
+================================================================================
+#pragma once
+#include <vector>
+
+enum class CellType {
+    EMPTY, // empty cell = 0
+    SOLID_WALL, // solid wall = 1
+    BREAKABLE_WALL, // breakable wall = 2
+};
+
+class Board {
+    private:
+        int m_width;
+        int m_height;
+        std::vector<std::vector<CellType>> m_grid; // 2D grid of cellType vectors representing the board
+
+
+    public:
+
+        Board(int width, int height);
+
+        int getWidth() const;
+        int getHeight() const;
+
+        CellType getCellType(int x, int y) const;
+        void setCellType(int x, int y, CellType type);
+};
+
+================================================================================
+FILE: include/core/ConsoleInput.h
+================================================================================
+#pragma once
+#include "../interfaces/IInput.h"
+#include <termios.h>
+#include <vector>
+
+class ConsoleInput : public IInput {
+private:
+    struct termios m_oldTermios{};
+    bool m_isNonBlocking = false;
+    void setNonBlocking(bool enable);
+
+public:
+    ConsoleInput();
+    ~ConsoleInput() override;
+    Command getCommand() override;
+    std::vector<PlayerCommand> pollCommands() override;
+    char getRawChar();
+};
+
+
+================================================================================
+FILE: include/core/ConsoleRenderer.h
+================================================================================
+#pragma once
+#include "../interfaces/IRenderer.h"
+#include "World.h"
+
+class ConsoleRenderer : public IRenderer {
+    public:
+        void render(const World& world, int sdTimerTicks = -1, bool sdActive = false) override;
+};
+
+
+================================================================================
+FILE: include/core/Game.h
+================================================================================
+#pragma once
+#include "World.h"
+#include "../interfaces/ILevel.h"
+#include "../systems/ExplosionSystem.h"
+#include "../systems/CollisionSystem.h"
+#include "../systems/SuddenDeathSystem.h"
+#include "../interfaces/IInput.h"
+#include <vector>
+#include <string>
+
+struct StepResult {
+    bool isDone = false;
+    float reward = 0.0f;
+    int wallsDestroyed = 0;
+    int enemiesHit = 0;
+    int enemiesKilled = 0;
+    int powerUpsCollected = 0;
+    int livesLost = 0;
+    bool moved = false;
+    bool bombPlaced = false;
+    bool bombPushed = false;
+    bool won = false;
+    bool died = false;
+};
+
+struct PlayerInfo {
+    int id = -1;
+    int x = -1;
+    int y = -1;
+    int lives = 0;
+    int maxBombs = 1;
+    int availBombs = 0;
+    int bombRadius = 2;
+    int speedLevel = 0;
+    int cooldown = 0;
+    int moveCooldownMax = 4;
+    int invincibilityTimer = 0;
+    int facingDx = 0;
+    int facingDy = 1;
+    bool hasHammer = false;
+    bool hasRing = false;
+    bool isBot = false;
+    bool isAlive = false;
+};
+
+struct BombInfo {
+    int x = 0;
+    int y = 0;
+    int timer = 0;
+    int radius = 2;
+    int ownerId = -1;
+    int creditOwnerId = -1;
+    bool isSliding = false;
+    int slideDx = 0;
+    int slideDy = 0;
+    int slideCooldown = 0;
+    int slideCooldownMax = 2;
+};
+
+struct PowerUpInfo {
+    int x = 0;
+    int y = 0;
+    char type = ' ';
+};
+
+struct FlameInfo {
+    int x = 0;
+    int y = 0;
+    int timer = 0;
+    int ownerId = -1;
+};
+
+class Game {
+private:
+    World m_world;
+    ExplosionSystem m_explosionSystem;
+    CollisionSystem m_collisionSystem;
+    SuddenDeathSystem m_suddenDeathSystem;
+
+public:
+    Game(int boardWidth, int boardHeight);
+    World& getWorld();
+    const World& getWorld() const;
+
+    void loadLevel(ILevel& level, int numHumanPlayers = 0, int numBots = 0, bool shuffleSpawns = true);
+    void reset(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
+    StepResult step(int playerId, Command action, const std::vector<PlayerCommand>& extraCommands = {});
+    void fillState(int playerId, float* state) const;
+    std::vector<float> getState(int playerId) const;
+    std::vector<std::vector<int>> getBoardGrid() const;
+
+    PlayerInfo getPlayerInfo(int playerId) const;
+    std::vector<BombInfo> getBombs() const;
+    std::vector<PowerUpInfo> getPowerUps() const;
+    std::vector<FlameInfo> getFlames() const;
+
+    // Deterministic setup helpers for unit testing & custom scenarios
+    void clearBoard();
+    void setSolidWall(int x, int y, bool solid);
+    void addPlayer(int x, int y, int id, bool isBot = false);
+    void addBreakableWall(int x, int y);
+    void addBomb(int x, int y, int timer, int radius, int ownerId);
+    void addPowerUp(int x, int y, const std::string& type);
+    void givePlayerPowerUp(int playerId, const std::string& type);
+
+    void update(Command command = Command::NONE);
+    void update(const std::vector<PlayerCommand>& commands);
+
+    bool isGameOver() const;
+    int getWinnerId() const;
+
+    int getSuddenDeathTimer() const;
+    void setSuddenDeathTimer(int ticks);
+    bool isSuddenDeathActive() const;
+};
+
+
+================================================================================
+FILE: include/core/World.h
+================================================================================
+#pragma once
+#include <vector>
+#include <memory>
+#include <unordered_map>
+#include "Board.h"
+#include "../entities/Entity.h"
+
+class Player;
+
+class World {
+private:
+    Board m_board;
+    std::vector<std::unique_ptr<Entity>> m_entities;
+    std::vector<std::unique_ptr<Entity>> m_spawnQueue;
+    std::unordered_map<int, int> m_wallsDestroyedByOwner;
+    std::unordered_map<int, int> m_enemiesKilledByOwner;
+    std::unordered_map<int, int> m_enemiesHitByOwner;
+
+public:
+    World(int width, int height);
+
+    Board& getBoard();
+    const Board& getBoard() const;
+
+    const std::vector<std::unique_ptr<Entity>>& getEntities() const;
+    const std::vector<std::unique_ptr<Entity>>& getSpawnQueue() const;
+    std::vector<Entity*> getEntitiesAt(int x, int y) const;
+
+    void addEntity(std::unique_ptr<Entity> entity);
+    void sync();
+    void clear();
+
+    bool isPositionValid(int x, int y) const;
+    bool isTileFree(int x, int y) const;
+    int countBombsForOwner(int ownerId) const;
+    Player* getPlayer(int id);
+    const Player* getPlayer(int id) const;
+    int countBreakableWalls() const;
+
+    void recordWallDestroyed(int ownerId);
+    int popWallsDestroyed(int ownerId);
+
+    void recordEnemyKilled(int ownerId);
+    int popEnemiesKilled(int ownerId);
+
+    void recordEnemyHit(int ownerId);
+    int popEnemiesHit(int ownerId);
+};
+
+
+================================================================================
+FILE: include/entities/Bomb.h
+================================================================================
+#pragma once
+#include "Entity.h"
+#include "../interfaces/IPushable.h"
+
+class World;
+
+class Bomb : public Entity, public IPushable {
+public:
+    static constexpr int SLIDE_COOLDOWN_FRAMES = 3;
+
+private:
+    int m_timer;
+    int m_radius;
+    int m_ownerId;       // ID of the player who placed the bomb (for maxBombs quota)
+    int m_creditOwnerId; // ID of the player credited for blast effects (updated on hammer push)
+    int m_dx = 0;
+    int m_dy = 0;
+    int m_slideCooldown = 0;
+
+public:
+    Bomb(int x, int y, int timer, int radius, int ownerId);
+
+    void push(int dx, int dy, int pusherId = -1) override;
+    int getRadius() const;
+    int getOwnerId() const;
+    int getCreditOwnerId() const;
+    int getTimer() const;
+    bool isSliding() const;
+    int getSlideDx() const;
+    int getSlideDy() const;
+    int getSlideCooldown() const;
+
+    static bool canSlideTo(const World& world, int x, int y);
+
+    EntityType getType() const override;
+    char getDisplayChar() const override;
+    void update(World& world) override;
+
+    bool isSolid() const override;
+    bool stopsExplosion() const override;
+    bool shouldExplode() const override;
+
+    void onExplosionHit(World& world) override;
+};
+
+
+================================================================================
+FILE: include/entities/BombPowerUp.h
+================================================================================
+#pragma once
+#include "PowerUp.h"
+
+class BombPowerUp : public PowerUp {
+    public:
+        BombPowerUp(int x, int y);
+        void apply(Player& player) override;
+        char getDisplayChar() const override;
+};
+
+================================================================================
+FILE: include/entities/BreakableWall.h
+================================================================================
+#pragma once
+#include "Entity.h"
+
+class BreakableWall : public Entity {
+    public:
+        BreakableWall(int x, int y);
+
+        EntityType getType() const override;
+        char getDisplayChar() const override;
+        void update(World& world) override;
+
+        bool isSolid() const override;
+        bool stopsExplosion() const override;
+        void onExplosionHit(World& world) override;
+};
+
+================================================================================
+FILE: include/entities/DumbBot.h
+================================================================================
+#pragma once
+#include "Player.h"
+#include <string>
+
+class DumbBot : public Player {
+private:
+    static constexpr int BOT_REACTION_COOLDOWN = 6;
+    static constexpr int SPAWN_BOMB_WARMUP_TICKS = 30;
+    static constexpr int BOMB_PLACEMENT_COOLDOWN = 45;
+
+    Command m_currentDir = Command::NONE;
+    int m_ticksAlive = 0;
+    int m_bombCooldown = 0;
+
+    bool canStepOn(int x, int y, const World& world) const;
+    bool hasClearBlastPath(int bx, int by, int tx, int ty, const World& world) const;
+    int getTileTimeToExplode(int x, int y, const World& world, int extraBx = -1, int extraBy = -1, int extraRadius = 0) const;
+    bool isTileDangerous(int x, int y, const World& world) const;
+    bool isTileDangerousWithExtraBomb(int x, int y, const World& world, int extraBx, int extraBy, int extraRadius) const;
+    Command findEscapeDirection(const World& world, int extraBx = -1, int extraBy = -1, int extraRadius = 0) const;
+    Command findExplorationDirection(const World& world) const;
+
+public:
+    DumbBot(int startX, int startY, int id);
+
+    bool isBot() const override;
+    std::string getDisplayName() const override;
+    char getDisplayChar() const override;
+    void update(World& world) override;
+};
+
+
+================================================================================
+FILE: include/entities/Entity.h
+================================================================================
+#pragma once
+#include "../interfaces/IInput.h"
+
+enum class EntityType {
+    PLAYER,
+    BOMB,
+    FLAME,
+    BREAKABLE_WALL,
+    POWER_UP
+};
+
+class World;
+
+class Entity {
+private:
+    int m_x;
+    int m_y;
+    bool m_isAlive;
+
+protected:
+    virtual void setX(int x);
+    virtual void setY(int y);
+
+public:
+    Entity(int startX, int startY);
+    virtual ~Entity() = default;
+
+    virtual int getX() const;
+    virtual int getY() const;
+    virtual bool isAlive() const;
+    virtual void destroy();
+
+    virtual char getDisplayChar() const = 0;
+    virtual EntityType getType() const = 0;
+    virtual void update(World& world) = 0;
+
+    virtual bool isSolid() const { return false; }
+    virtual bool stopsExplosion() const { return false; }
+    virtual bool shouldExplode() const { return false; }
+
+    virtual void handleCommand(Command /*cmd*/, World& /*world*/) {}
+    virtual void onExplosionHit(World& world);
+    virtual void onIntersect(Entity& /*other*/, World& /*world*/) {}
+};
+
+
+================================================================================
+FILE: include/entities/Flame.h
+================================================================================
+#pragma once
+#include "Entity.h"
+
+class Flame : public Entity {
+private:
+    int m_timer;
+    int m_ownerId;
+    bool m_activeForCollision = true;
+
+public:
+    Flame(int x, int y, int timer, int ownerId = -1);
+
+    int getOwnerId() const;
+    int getTimer() const;
+
+    EntityType getType() const override;
+    char getDisplayChar() const override;
+    void update(World& world) override;
+
+    void onExplosionHit(World& world) override;
+    void onIntersect(Entity& other, World& world) override;
+};
+
+
+================================================================================
+FILE: include/entities/HammerPowerUp.h
+================================================================================
+#pragma once
+#include "PowerUp.h"
+
+class HammerPowerUp : public PowerUp {
+    public:
+        HammerPowerUp(int x, int y);
+        void apply(Player& player) override;
+        char getDisplayChar() const override;
+};
+
+
+================================================================================
+FILE: include/entities/LightningPowerUp.h
+================================================================================
+#pragma once
+#include "PowerUp.h"
+
+class LightningPowerUp : public PowerUp {
+    public:
+        LightningPowerUp(int x, int y);
+        void apply(Player& player) override;
+        char getDisplayChar() const override;
+};
+
+================================================================================
+FILE: include/entities/Player.h
+================================================================================
+#pragma once
+#include "Entity.h"
+#include <string>
+
+class Player : public Entity {
+public:
+    static constexpr int INITIAL_LIVES = 3;
+    static constexpr int INITIAL_BOMB_RADIUS = 2;
+    static constexpr int INITIAL_MAX_BOMBS = 1;
+    static constexpr int DEFAULT_BOMB_TIMER = 90;
+    static constexpr int INVINCIBILITY_FRAMES = 60;
+    static constexpr int BASE_MOVE_COOLDOWN = 6;
+    static constexpr int MIN_MOVE_COOLDOWN = 4;
+    static constexpr int MAX_SPEED_LEVEL = 2;
+
+private:
+    int m_id;
+    int m_bombRadius;
+    int m_maxBombs;
+    int m_speedLevel;
+    int m_cooldown;
+    bool m_hasHammer = false;
+    bool m_hasRing = false;
+    int m_facingDx = 0;
+    int m_facingDy = 1;
+    int m_lives;
+    int m_invincibilityTimer;
+
+    void tryMove(int targetX, int targetY, World& world);
+    void tryPlaceOrPushBomb(World& world);
+
+protected:
+    void addCooldown(int frames);
+    bool canPlaceBomb(const World& world) const;
+
+public:
+    Player(int startX, int startY, int id);
+
+    int getId() const;
+    int getLives() const;
+    int getMaxBombs() const;
+    int getBombRadius() const;
+    int getSpeedLevel() const;
+    int getCooldown() const;
+    int getMoveCooldownMax() const;
+    int getInvincibilityTimer() const;
+    int getFacingDx() const;
+    int getFacingDy() const;
+    bool hasHammer() const;
+    bool hasRing() const;
+    bool isOnCooldown() const;
+
+    virtual bool isBot() const;
+    virtual std::string getDisplayName() const;
+
+    EntityType getType() const override;
+    char getDisplayChar() const override;
+
+    void update(World& world) override;
+    void handleCommand(Command command, World& world) override;
+    void onExplosionHit(World& world) override;
+    void onExplosionHit(World& world, bool bypassInvincibility);
+
+    void increaseBombRadius();
+    void increaseMaxBombs();
+    void increaseSpeed();
+    void enableHammer();
+    void enableRing();
+};
+
+
+================================================================================
+FILE: include/entities/PowerUp.h
+================================================================================
+#pragma once
+#include "Entity.h"
+
+class Player; 
+
+class PowerUp : public Entity {
+    public:
+        PowerUp(int x, int y);
+
+        EntityType getType() const override;
+        void update(World& world) override;
+
+        bool isSolid() const override;
+        bool stopsExplosion() const override;
+        
+        void onExplosionHit(World& world) override;
+        void onIntersect(Entity& other, World& world) override;
+
+        virtual void apply(Player& player) = 0;
+};
+
+================================================================================
+FILE: include/entities/RingPowerUp.h
+================================================================================
+#pragma once
+#include "PowerUp.h"
+
+class RingPowerUp : public PowerUp {
+    public:
+        RingPowerUp(int x, int y);
+        char getDisplayChar() const override;
+        void apply(Player& player) override;
+};
+
+================================================================================
+FILE: include/entities/SpeedPowerUp.h
+================================================================================
+#pragma once
+#include "PowerUp.h"
+
+class SpeedPowerUp : public PowerUp {
+    public:
+        SpeedPowerUp(int x, int y);
+        void apply(Player& player) override;
+        char getDisplayChar() const override;
+};
+
+================================================================================
+FILE: include/factories/PowerUpFactory.h
+================================================================================
+#pragma once
+
+class World;
+
+class PowerUpFactory {
+    public:
+        static void trySpawn(World& world, int x, int y);
+};
+
+================================================================================
+FILE: include/interfaces/IInput.h
+================================================================================
+#pragma once
+#include <vector>
+
+enum class Command {
+    NONE,
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+    PLACE_BOMB,
+    QUIT
+};
+
+struct PlayerCommand {
+    int playerId;
+    Command command;
+};
+
+class IInput {
+public:
+    virtual ~IInput() = default;
+    virtual Command getCommand() = 0;
+    virtual std::vector<PlayerCommand> pollCommands() = 0;
+};
+
+
+================================================================================
+FILE: include/interfaces/ILevel.h
+================================================================================
+#pragma once
+#include <vector>
+
+class World;
+
+struct Position {
+    int x;
+    int y;
+};
+
+class ILevel {
+public:
+    virtual ~ILevel() = default;
+    virtual void generate(World& world) = 0;
+    virtual std::vector<Position> getSpawnPoints() const = 0;
+};
+
+
+================================================================================
+FILE: include/interfaces/IPushable.h
+================================================================================
+#pragma once
+
+class IPushable {
+public:
+    virtual ~IPushable() = default;
+    virtual void push(int dx, int dy, int pusherId = -1) = 0;
+};
+
+
+================================================================================
+FILE: include/interfaces/IRenderer.h
+================================================================================
+#pragma once
+
+class World;
+
+class IRenderer {
+    public:
+        virtual ~IRenderer() = default;
+        // Render world state along with Sudden Death timer and active status
+        virtual void render(const World& world, int sdTimerTicks = -1, bool sdActive = false) = 0;
+};
+
+
+================================================================================
+FILE: include/levels/ClassicLevel.h
+================================================================================
+#pragma once
+#include "../interfaces/ILevel.h"
+#include <vector>
+
+class World;
+
+class ClassicLevel : public ILevel {
+private:
+    int m_numPlayers;
+    int m_wallDensityPercent;
+    std::vector<Position> m_spawnPoints;
+
+    bool isSafeZone(int x, int y) const;
+
+public:
+    ClassicLevel(int numPlayers, int boardWidth, int boardHeight, int wallDensityPercent = 65);
+    void generate(World& world) override;
+    std::vector<Position> getSpawnPoints() const override;
+};
+
+
+================================================================================
+FILE: include/systems/CollisionSystem.h
+================================================================================
+#pragma once
+
+class World;
+
+class CollisionSystem {
+    public:
+        void process(World& world);
+};
+
+================================================================================
+FILE: include/systems/ExplosionSystem.h
+================================================================================
+#pragma once
+
+class World;
+class Bomb;
+
+class ExplosionSystem {
+    private:
+        bool explodeTile(World& world, int targetX, int targetY, int ownerId = -1);
+        void explodeInDirection(World& world, int startX, int startY, int dx, int dy, int radius, int ownerId = -1);
+
+    public:
+        void process(World& world);
+};
+
+
+================================================================================
+FILE: include/systems/SuddenDeathSystem.h
+================================================================================
+#pragma once
+#include <vector>
+
+class World;
+
+struct SuddenDeathDangerTile {
+    int x;
+    int y;
+    int ticksUntilDrop;
+};
+
+class SuddenDeathSystem {
+private:
+    int m_ticksUntilStart;
+    int m_dropCooldown;
+    int m_currentCooldown;
+
+    int m_minX, m_maxX;
+    int m_minY, m_maxY;
+    int m_x, m_y;
+    int m_dx, m_dy;
+
+    bool m_isFinished;
+
+public:
+    SuddenDeathSystem(int startDelayTicks, int boardWidth, int boardHeight);
+    void process(World& world);
+    
+    int getTicksRemaining() const;
+    void setTicksRemaining(int ticks);
+    bool isActive() const;
+    std::vector<SuddenDeathDangerTile> getImminentDangerTiles(int lookaheadTicks = 90) const;
+};
+
+
+================================================================================
+FILE: src/bindings/bindings.cpp
+================================================================================
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/numpy.h>
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include "../../include/core/Game.h"
+#include "../../include/levels/ClassicLevel.h"
+
+namespace py = pybind11;
+
+PYBIND11_MODULE(bomberman_engine, m) {
+    m.doc() = "C++ Bomberman Engine bound to Python";
+
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    m.def("seed_rng", [](unsigned int seed) {
+        std::srand(seed);
+    }, "Seeds the C++ rand() generator for reproducible level generation");
+
+    py::enum_<Command>(m, "Command")
+        .value("NONE", Command::NONE)
+        .value("UP", Command::UP)
+        .value("DOWN", Command::DOWN)
+        .value("LEFT", Command::LEFT)
+        .value("RIGHT", Command::RIGHT)
+        .value("PLACE_BOMB", Command::PLACE_BOMB)
+        .export_values();
+
+    py::class_<PlayerCommand>(m, "PlayerCommand")
+        .def(py::init<int, Command>(), py::arg("playerId"), py::arg("command"))
+        .def_readwrite("playerId", &PlayerCommand::playerId)
+        .def_readwrite("command", &PlayerCommand::command);
+
+    py::class_<StepResult>(m, "StepResult")
+        .def_readonly("isDone", &StepResult::isDone)
+        .def_readonly("reward", &StepResult::reward)
+        .def_readonly("wallsDestroyed", &StepResult::wallsDestroyed)
+        .def_readonly("enemiesHit", &StepResult::enemiesHit)
+        .def_readonly("enemiesKilled", &StepResult::enemiesKilled)
+        .def_readonly("powerUpsCollected", &StepResult::powerUpsCollected)
+        .def_readonly("livesLost", &StepResult::livesLost)
+        .def_readonly("moved", &StepResult::moved)
+        .def_readonly("bombPlaced", &StepResult::bombPlaced)
+        .def_readonly("bombPushed", &StepResult::bombPushed)
+        .def_readonly("won", &StepResult::won)
+        .def_readonly("died", &StepResult::died);
+
+    py::class_<PlayerInfo>(m, "PlayerInfo")
+        .def_readonly("id", &PlayerInfo::id)
+        .def_readonly("x", &PlayerInfo::x)
+        .def_readonly("y", &PlayerInfo::y)
+        .def_readonly("lives", &PlayerInfo::lives)
+        .def_readonly("maxBombs", &PlayerInfo::maxBombs)
+        .def_readonly("availBombs", &PlayerInfo::availBombs)
+        .def_readonly("bombRadius", &PlayerInfo::bombRadius)
+        .def_readonly("speedLevel", &PlayerInfo::speedLevel)
+        .def_readonly("cooldown", &PlayerInfo::cooldown)
+        .def_readonly("moveCooldownMax", &PlayerInfo::moveCooldownMax)
+        .def_readonly("invincibilityTimer", &PlayerInfo::invincibilityTimer)
+        .def_readonly("facingDx", &PlayerInfo::facingDx)
+        .def_readonly("facingDy", &PlayerInfo::facingDy)
+        .def_readonly("hasHammer", &PlayerInfo::hasHammer)
+        .def_readonly("hasRing", &PlayerInfo::hasRing)
+        .def_readonly("isBot", &PlayerInfo::isBot)
+        .def_readonly("isAlive", &PlayerInfo::isAlive);
+
+    py::class_<BombInfo>(m, "BombInfo")
+        .def_readonly("x", &BombInfo::x)
+        .def_readonly("y", &BombInfo::y)
+        .def_readonly("timer", &BombInfo::timer)
+        .def_readonly("radius", &BombInfo::radius)
+        .def_readonly("ownerId", &BombInfo::ownerId)
+        .def_readonly("creditOwnerId", &BombInfo::creditOwnerId)
+        .def_readonly("isSliding", &BombInfo::isSliding)
+        .def_readonly("slideDx", &BombInfo::slideDx)
+        .def_readonly("slideDy", &BombInfo::slideDy)
+        .def_readonly("slideCooldown", &BombInfo::slideCooldown)
+        .def_readonly("slideCooldownMax", &BombInfo::slideCooldownMax);
+
+    py::class_<PowerUpInfo>(m, "PowerUpInfo")
+        .def_readonly("x", &PowerUpInfo::x)
+        .def_readonly("y", &PowerUpInfo::y)
+        .def_readonly("type", &PowerUpInfo::type);
+
+    py::class_<FlameInfo>(m, "FlameInfo")
+        .def_readonly("x", &FlameInfo::x)
+        .def_readonly("y", &FlameInfo::y)
+        .def_readonly("timer", &FlameInfo::timer)
+        .def_readonly("ownerId", &FlameInfo::ownerId);
+
+    py::class_<ILevel>(m, "ILevel");
+    py::class_<ClassicLevel, ILevel>(m, "ClassicLevel")
+        .def(py::init<int, int, int, int>(),
+             py::arg("numPlayers"),
+             py::arg("boardWidth"),
+             py::arg("boardHeight"),
+             py::arg("wallDensityPercent") = 65);
+
+    py::class_<Game>(m, "Game")
+        .def(py::init<int, int>())
+        .def("reset", &Game::reset)
+        .def("step", &Game::step,
+             py::arg("playerId"),
+             py::arg("action"),
+             py::arg("extraCommands") = std::vector<PlayerCommand>{})
+        .def("update", py::overload_cast<Command>(&Game::update), py::arg("command") = Command::NONE)
+        .def("updateCommands", py::overload_cast<const std::vector<PlayerCommand>&>(&Game::update), py::arg("commands"))
+        .def("getState", [](const Game& self, int playerId) {
+            const int width = self.getWorld().getBoard().getWidth();
+            const int height = self.getWorld().getBoard().getHeight();
+            constexpr int channels = 10;
+            py::array_t<float> result({channels, height, width});
+            float* ptr = static_cast<float*>(result.request().ptr);
+            std::fill(ptr, ptr + (channels * height * width), 0.0f);
+            self.fillState(playerId, ptr);
+            return result;
+        }, py::arg("playerId"))
+        .def("getBoardGrid", &Game::getBoardGrid)
+        .def("getPlayerInfo", &Game::getPlayerInfo)
+        .def("getBombs", &Game::getBombs)
+        .def("getPowerUps", &Game::getPowerUps)
+        .def("getFlames", &Game::getFlames)
+        .def("clearBoard", &Game::clearBoard)
+        .def("setSolidWall", &Game::setSolidWall)
+        .def("addPlayer", &Game::addPlayer, py::arg("x"), py::arg("y"), py::arg("id"), py::arg("isBot") = false)
+        .def("addBreakableWall", &Game::addBreakableWall)
+        .def("addBomb", &Game::addBomb)
+        .def("addPowerUp", &Game::addPowerUp)
+        .def("givePlayerPowerUp", &Game::givePlayerPowerUp)
+        .def("isGameOver", &Game::isGameOver)
+        .def("getWinnerId", &Game::getWinnerId)
+        .def("getSuddenDeathTimer", &Game::getSuddenDeathTimer)
+        .def("setSuddenDeathTimer", &Game::setSuddenDeathTimer)
+        .def("isSuddenDeathActive", &Game::isSuddenDeathActive);
+}
+
+
+================================================================================
+FILE: src/core/Board.cpp
+================================================================================
+#include "../../include/core/Board.h"
+
+Board::Board(int width, int height) {
+    m_width = width;
+    m_height = height;
+    m_grid.resize(m_width, std::vector<CellType>(m_height, CellType::EMPTY));
+}
+
+int Board::getWidth() const {
+    return m_width;
+}
+
+int Board::getHeight() const {
+    return m_height;
+}
+
+CellType Board::getCellType(int x, int y) const {
+    if (x < 0 || x >= m_width || y < 0 || y >= m_height) {
+        return CellType::SOLID_WALL; // Out of bounds, treat as solid wall
+    }
+    return m_grid[x][y];
+}
+
+void Board::setCellType(int x, int y, CellType type) {
+    if (x < 0 || x >= m_width || y < 0 || y >= m_height) {
+        return; // Out of bounds, do nothing
+    }
+    m_grid[x][y] = type;
+}
+
+
+
+
+================================================================================
+FILE: src/core/ConsoleInput.cpp
+================================================================================
+#include "../../include/core/ConsoleInput.h"
+#include <unistd.h>
+#include <fcntl.h>
+
+ConsoleInput::ConsoleInput() {
+    setNonBlocking(true);
+}
+
+ConsoleInput::~ConsoleInput() {
+    setNonBlocking(false);
+}
+
+void ConsoleInput::setNonBlocking(bool enable) {
+    if (enable && !m_isNonBlocking) {
+        tcgetattr(STDIN_FILENO, &m_oldTermios);
+        struct termios newt = m_oldTermios;
+        newt.c_lflag &= ~(ICANON | ECHO);
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+        m_isNonBlocking = true;
+    } else if (!enable && m_isNonBlocking) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &m_oldTermios);
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
+        m_isNonBlocking = false;
+    }
+}
+
+char ConsoleInput::getRawChar() {
+    char c = '\0';
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+        return c;
+    }
+    return '\0';
+}
+
+Command ConsoleInput::getCommand() {
+    char c = getRawChar();
+    switch (c) {
+        case 'w': case 'W': return Command::UP;
+        case 's': case 'S': return Command::DOWN;
+        case 'a': case 'A': return Command::LEFT;
+        case 'd': case 'D': return Command::RIGHT;
+        case ' ': return Command::PLACE_BOMB;
+        case 'q': case 'Q': return Command::QUIT;
+        default: return Command::NONE;
+    }
+}
+
+std::vector<PlayerCommand> ConsoleInput::pollCommands() {
+    std::vector<PlayerCommand> commands;
+    char pending = '\0';
+
+    while (true) {
+        char input = (pending != '\0') ? pending : getRawChar();
+        pending = '\0';
+        if (input == '\0') break;
+
+        if (input == 'q' || input == 'Q') {
+            commands.push_back({0, Command::QUIT});
+            break;
+        }
+
+        if (input == '\033') {
+            char next = getRawChar();
+            if (next == '[') {
+                char arrow = getRawChar();
+                if (arrow == 'A') commands.push_back({1, Command::UP});
+                else if (arrow == 'B') commands.push_back({1, Command::DOWN});
+                else if (arrow == 'C') commands.push_back({1, Command::RIGHT});
+                else if (arrow == 'D') commands.push_back({1, Command::LEFT});
+            } else if (next != '\0') {
+                pending = next;
+            }
+            continue;
+        }
+
+        switch (input) {
+            case ' ': commands.push_back({1, Command::PLACE_BOMB}); break;
+            case 'w': case 'W': commands.push_back({2, Command::UP}); break;
+            case 's': case 'S': commands.push_back({2, Command::DOWN}); break;
+            case 'a': case 'A': commands.push_back({2, Command::LEFT}); break;
+            case 'd': case 'D': commands.push_back({2, Command::RIGHT}); break;
+            case 'e': case 'E': commands.push_back({2, Command::PLACE_BOMB}); break;
+            default: break;
+        }
+    }
+    return commands;
+}
+
+
+================================================================================
+FILE: src/core/ConsoleRenderer.cpp
+================================================================================
+#include "../../include/core/ConsoleRenderer.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/Player.h"
+#include <iostream>
+#include <vector>
+#include <string>
+
+namespace {
+    int getRenderPriority(EntityType type) {
+        switch (type) {
+            case EntityType::POWER_UP:       return 1;
+            case EntityType::BOMB:           return 2;
+            case EntityType::BREAKABLE_WALL: return 3;
+            case EntityType::PLAYER:         return 4;
+            case EntityType::FLAME:          return 5;
+        }
+        return 0;
+    }
+}
+
+void ConsoleRenderer::render(const World& world, int sdTimerTicks, bool sdActive) {
+    const Board& board = world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+
+    std::vector<std::vector<char>> display(width, std::vector<char>(height, ' '));
+    std::vector<std::vector<int>> priority(width, std::vector<int>(height, 0));
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            CellType cellType = board.getCellType(x, y);
+            if (cellType == CellType::SOLID_WALL) {
+                display[x][y] = '#';
+                priority[x][y] = 10;
+            } else if (cellType == CellType::BREAKABLE_WALL) {
+                display[x][y] = 'B';
+                priority[x][y] = 3;
+            }
+        }
+    }
+
+    for (const auto& entity : world.getEntities()) {
+        if (!entity->isAlive()) continue;
+
+        int ex = entity->getX();
+        int ey = entity->getY();
+
+        if (ex >= 0 && ex < width && ey >= 0 && ey < height) {
+            char ch = entity->getDisplayChar();
+            if (ch == ' ') continue;
+
+            int p = getRenderPriority(entity->getType());
+            if (p >= priority[ex][ey]) {
+                display[ex][ey] = ch;
+                priority[ex][ey] = p;
+            }
+        }
+    }
+
+    std::cout << "\033[2J\033[1;1H";
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            std::cout << display[x][y] << ' ' << ' ';
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "\n============================================\n";
+    
+    // Display Sudden Death countdown or active alert
+    if (sdActive) {
+        std::cout << "      !!! SUDDEN DEATH ACTIVE !!!\n";
+    } else if (sdTimerTicks >= 0) {
+        int seconds = sdTimerTicks / 30;
+        std::cout << "      Sudden Death in: " << seconds << "s\n";
+    }
+    std::cout << "--------------------------------------------\n";
+
+    for (const auto& entity : world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::PLAYER) {
+            const Player* p = static_cast<const Player*>(entity.get());
+
+            std::cout << " " << p->getDisplayName() << " | ";
+            std::cout << "Lives: " << p->getLives() << " | ";
+            std::cout << "Bombs: " << p->getMaxBombs() << " | ";
+            std::cout << "Rad: " << p->getBombRadius() << " | ";
+            std::cout << "Spd: " << p->getSpeedLevel();
+
+            if (p->hasHammer()) std::cout << " [H]";
+            if (p->hasRing()) std::cout << " [R]";
+
+            std::cout << "\n";
+        }
+    }
+    std::cout << "============================================\n";
+}
+
+
+================================================================================
+FILE: src/core/Game.cpp
+================================================================================
+#include "../../include/core/Game.h"
+#include "../../include/entities/Player.h"
+#include "../../include/entities/DumbBot.h"
+#include "../../include/entities/Bomb.h"
+#include "../../include/entities/BreakableWall.h"
+#include "../../include/entities/BombPowerUp.h"
+#include "../../include/entities/LightningPowerUp.h"
+#include "../../include/entities/SpeedPowerUp.h"
+#include "../../include/entities/HammerPowerUp.h"
+#include "../../include/entities/RingPowerUp.h"
+#include "../../include/entities/Flame.h"
+#include <memory>
+#include <algorithm>
+#include <cstdlib>
+
+Game::Game(int boardWidth, int boardHeight)
+    : m_world(boardWidth, boardHeight),
+      m_suddenDeathSystem(80 * 30, boardWidth, boardHeight) {}
+
+World& Game::getWorld() { return m_world; }
+const World& Game::getWorld() const { return m_world; }
+int Game::getSuddenDeathTimer() const { return m_suddenDeathSystem.getTicksRemaining(); }
+void Game::setSuddenDeathTimer(int ticks) { m_suddenDeathSystem.setTicksRemaining(ticks); }
+bool Game::isSuddenDeathActive() const { return m_suddenDeathSystem.isActive(); }
+
+void Game::loadLevel(ILevel& level, int numHumanPlayers, int numBots, bool shuffleSpawns) {
+    level.generate(m_world);
+    if (numHumanPlayers > 0 || numBots > 0) {
+        auto spawnPoints = level.getSpawnPoints();
+        if (shuffleSpawns && spawnPoints.size() > 1) {
+            for (size_t i = spawnPoints.size() - 1; i > 0; --i) {
+                size_t j = static_cast<size_t>(std::rand()) % (i + 1);
+                std::swap(spawnPoints[i], spawnPoints[j]);
+            }
+        }
+        size_t currentSpawnIdx = 0;
+        int nextId = 1;
+        for (int i = 0; i < numHumanPlayers && currentSpawnIdx < spawnPoints.size(); ++i) {
+            m_world.addEntity(std::make_unique<Player>(
+                spawnPoints[currentSpawnIdx].x, spawnPoints[currentSpawnIdx].y, nextId++));
+            currentSpawnIdx++;
+        }
+        for (int i = 0; i < numBots && currentSpawnIdx < spawnPoints.size(); ++i) {
+            m_world.addEntity(std::make_unique<DumbBot>(
+                spawnPoints[currentSpawnIdx].x, spawnPoints[currentSpawnIdx].y, nextId++));
+            currentSpawnIdx++;
+        }
+        m_world.sync();
+    }
+}
+
+void Game::update(Command command) {
+    std::vector<PlayerCommand> commands;
+    if (command != Command::NONE) commands.push_back({1, command});
+    update(commands);
+}
+
+void Game::update(const std::vector<PlayerCommand>& commands) {
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive()) entity->update(m_world);
+    }
+    m_world.sync();
+
+    if (!commands.empty()) {
+        for (const auto& pc : commands) {
+            Player* p = m_world.getPlayer(pc.playerId);
+            if (p && p->isAlive() && !p->isBot()) {
+                p->handleCommand(pc.command, m_world);
+            }
+        }
+        m_world.sync();
+    }
+
+    m_explosionSystem.process(m_world);
+    m_collisionSystem.process(m_world);
+    m_suddenDeathSystem.process(m_world);
+    m_world.sync();
+}
+
+bool Game::isGameOver() const {
+    int alivePlayers = 0;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::PLAYER) alivePlayers++;
+    }
+    return alivePlayers <= 1;
+}
+
+int Game::getWinnerId() const {
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::PLAYER) {
+            return static_cast<const Player*>(entity.get())->getId();
+        }
+    }
+    return -1;
+}
+
+void Game::reset(ILevel& level, int numHumanPlayers, int numBots) {
+    m_world.clear();
+    int width = m_world.getBoard().getWidth();
+    int height = m_world.getBoard().getHeight();
+    m_suddenDeathSystem = SuddenDeathSystem(80 * 30, width, height);
+    loadLevel(level, numHumanPlayers, numBots, true);
+}
+
+PlayerInfo Game::getPlayerInfo(int playerId) const {
+    PlayerInfo info;
+    info.id = playerId;
+    const Player* p = m_world.getPlayer(playerId);
+    if (!p || !p->isAlive()) {
+        return info;
+    }
+    info.x = p->getX();
+    info.y = p->getY();
+    info.lives = p->getLives();
+    info.maxBombs = p->getMaxBombs();
+    int activeB = m_world.countBombsForOwner(playerId);
+    info.availBombs = std::max(0, info.maxBombs - activeB);
+    info.bombRadius = p->getBombRadius();
+    info.speedLevel = p->getSpeedLevel();
+    info.cooldown = p->getCooldown();
+    info.moveCooldownMax = p->getMoveCooldownMax();
+    info.invincibilityTimer = p->getInvincibilityTimer();
+    info.facingDx = p->getFacingDx();
+    info.facingDy = p->getFacingDy();
+    info.hasHammer = p->hasHammer();
+    info.hasRing = p->hasRing();
+    info.isBot = p->isBot();
+    info.isAlive = p->isAlive();
+    return info;
+}
+
+std::vector<BombInfo> Game::getBombs() const {
+    std::vector<BombInfo> bombs;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            const auto* b = static_cast<const Bomb*>(entity.get());
+            BombInfo bi;
+            bi.x = b->getX();
+            bi.y = b->getY();
+            bi.timer = b->getTimer();
+            bi.radius = b->getRadius();
+            bi.ownerId = b->getOwnerId();
+            bi.creditOwnerId = b->getCreditOwnerId();
+            bi.isSliding = b->isSliding();
+            bi.slideDx = b->getSlideDx();
+            bi.slideDy = b->getSlideDy();
+            bi.slideCooldown = b->getSlideCooldown();
+            bi.slideCooldownMax = Bomb::SLIDE_COOLDOWN_FRAMES;
+            bombs.push_back(bi);
+        }
+    }
+    return bombs;
+}
+
+void Game::clearBoard() {
+    m_world.clear();
+    int width = m_world.getBoard().getWidth();
+    int height = m_world.getBoard().getHeight();
+    m_suddenDeathSystem = SuddenDeathSystem(80 * 30, width, height);
+}
+
+void Game::setSolidWall(int x, int y, bool solid) {
+    m_world.getBoard().setCellType(x, y, solid ? CellType::SOLID_WALL : CellType::EMPTY);
+}
+
+void Game::addPlayer(int x, int y, int id, bool isBot) {
+    if (isBot) {
+        m_world.addEntity(std::make_unique<DumbBot>(x, y, id));
+    } else {
+        m_world.addEntity(std::make_unique<Player>(x, y, id));
+    }
+    m_world.sync();
+}
+
+void Game::addBreakableWall(int x, int y) {
+    m_world.getBoard().setCellType(x, y, CellType::BREAKABLE_WALL);
+}
+
+void Game::addBomb(int x, int y, int timer, int radius, int ownerId) {
+    m_world.addEntity(std::make_unique<Bomb>(x, y, timer, radius, ownerId));
+    m_world.sync();
+}
+
+void Game::addPowerUp(int x, int y, const std::string& type) {
+    if (type == "hammer" || type == "H") m_world.addEntity(std::make_unique<HammerPowerUp>(x, y));
+    else if (type == "ring" || type == "R") m_world.addEntity(std::make_unique<RingPowerUp>(x, y));
+    else if (type == "bomb" || type == "B") m_world.addEntity(std::make_unique<BombPowerUp>(x, y));
+    else if (type == "lightning" || type == "L") m_world.addEntity(std::make_unique<LightningPowerUp>(x, y));
+    else if (type == "speed" || type == "S") m_world.addEntity(std::make_unique<SpeedPowerUp>(x, y));
+    m_world.sync();
+}
+
+void Game::givePlayerPowerUp(int playerId, const std::string& type) {
+    Player* p = m_world.getPlayer(playerId);
+    if (!p || !p->isAlive()) return;
+    if (type == "hammer" || type == "H") p->enableHammer();
+    else if (type == "ring" || type == "R") p->enableRing();
+    else if (type == "bomb" || type == "B") p->increaseMaxBombs();
+    else if (type == "lightning" || type == "L") p->increaseBombRadius();
+    else if (type == "speed" || type == "S") p->increaseSpeed();
+}
+
+void Game::fillState(int playerId, float* state) const {
+    const Board& board = m_world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+
+    auto setPixel = [&](int c, int x, int y, float value) {
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+            int index = c * width * height + y * width + x;
+            state[index] = std::max(state[index], value);
+        }
+    };
+    auto getPixel = [&](int c, int x, int y) -> float {
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+            return state[c * width * height + y * width + x];
+        }
+        return 0.0f;
+    };
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            CellType ct = board.getCellType(x, y);
+            if (ct == CellType::SOLID_WALL) setPixel(0, x, y, 1.0f);
+            else if (ct == CellType::BREAKABLE_WALL) setPixel(1, x, y, 1.0f);
+        }
+    }
+
+    const Player* selfPlayer = m_world.getPlayer(playerId);
+    if (selfPlayer) {
+        int maxB = selfPlayer->getMaxBombs();
+        int activeB = m_world.countBombsForOwner(playerId);
+        float availB = std::max(0, maxB - activeB) / 10.0f;
+        float specialVal = (selfPlayer->hasHammer() ? 0.6f : 0.0f) + (selfPlayer->hasRing() ? 0.4f : 0.0f);
+        for (int i = 0; i < width * height; ++i) {
+            state[8 * width * height + i] = availB;
+            state[9 * width * height + i] = specialVal;
+        }
+    }
+
+    std::vector<const Bomb*> activeBombs;
+    for (const auto& entity : m_world.getEntities()) {
+        if (!entity->isAlive()) continue;
+        int ex = entity->getX(), ey = entity->getY();
+        EntityType type = entity->getType();
+
+        if (type == EntityType::FLAME) { setPixel(4, ex, ey, 1.0f); setPixel(3, ex, ey, 1.0f); }
+        else if (type == EntityType::POWER_UP) setPixel(5, ex, ey, 1.0f);
+        else if (type == EntityType::PLAYER) {
+            const Player* player = static_cast<const Player*>(entity.get());
+            if (player->getId() == playerId) {
+                setPixel(6, ex, ey, player->isOnCooldown() ? 0.5f : 1.0f);
+            } else {
+                setPixel(7, ex, ey, 1.0f);
+            }
+        } else if (type == EntityType::BOMB) {
+            activeBombs.push_back(static_cast<const Bomb*>(entity.get()));
+        }
+    }
+
+    const int dx[] = {1, -1, 0, 0};
+    const int dy[] = {0, 0, 1, -1};
+
+    // Chain-Reaction Timer Propagation across bombs in line-of-fire
+    int nBombs = static_cast<int>(activeBombs.size());
+    std::vector<int> effectiveTimers(nBombs);
+    for (int i = 0; i < nBombs; ++i) {
+        effectiveTimers[i] = activeBombs[i]->getTimer();
+    }
+
+    bool changed = true;
+    int maxIter = nBombs + 1;
+    while (changed && maxIter-- > 0) {
+        changed = false;
+        for (int i = 0; i < nBombs; ++i) {
+            int bx = activeBombs[i]->getX();
+            int by = activeBombs[i]->getY();
+            int radius = activeBombs[i]->getRadius();
+            int t_i = effectiveTimers[i];
+
+            for (int dir = 0; dir < 4; ++dir) {
+                for (int r = 1; r <= radius; ++r) {
+                    int nx = bx + dx[dir] * r;
+                    int ny = by + dy[dir] * r;
+                    if (!m_world.isPositionValid(nx, ny) || board.getCellType(nx, ny) == CellType::SOLID_WALL) break;
+                    if (getPixel(1, nx, ny) > 0.0f) break; // Breakable wall blocks chain
+
+                    bool hitOtherBomb = false;
+                    for (int j = 0; j < nBombs; ++j) {
+                        if (i != j && activeBombs[j]->getX() == nx && activeBombs[j]->getY() == ny) {
+                            if (t_i < effectiveTimers[j]) {
+                                effectiveTimers[j] = t_i;
+                                changed = true;
+                            }
+                            hitOtherBomb = true;
+                        }
+                    }
+                    if (hitOtherBomb) break;
+                }
+            }
+        }
+    }
+
+    for (int bIdx = 0; bIdx < nBombs; ++bIdx) {
+        const Bomb* bomb = activeBombs[bIdx];
+        int ex = bomb->getX(), ey = bomb->getY();
+        float tNorm = std::clamp(1.0f - (static_cast<float>(effectiveTimers[bIdx]) / 100.0f), 0.1f, 1.0f);
+        setPixel(2, ex, ey, tNorm);
+        setPixel(3, ex, ey, tNorm);
+
+        auto projectBlastFrom = [&](int cx, int cy, float urgency) {
+            setPixel(3, cx, cy, urgency);
+            for (int i = 0; i < 4; ++i) {
+                for (int r = 1; r <= bomb->getRadius(); ++r) {
+                    int nx = cx + dx[i] * r, ny = cy + dy[i] * r;
+                    if (!m_world.isPositionValid(nx, ny) || board.getCellType(nx, ny) == CellType::SOLID_WALL) break;
+                    setPixel(3, nx, ny, urgency);
+                    if (getPixel(1, nx, ny) > 0.0f) break;
+                }
+            }
+        };
+
+        projectBlastFrom(ex, ey, tNorm);
+
+        // If the bomb is sliding, project its slide trajectory and final stopping blast zone
+        if (bomb->isSliding()) {
+            int sdx = bomb->getSlideDx();
+            int sdy = bomb->getSlideDy();
+            int curX = ex;
+            int curY = ey;
+            int ticksLeft = std::max(0, effectiveTimers[bIdx]);
+            int stepTicks = Bomb::SLIDE_COOLDOWN_FRAMES + 1;
+            int maxSlideSteps = std::max(1, (ticksLeft + stepTicks - 1) / stepTicks);
+
+            for (int s = 1; s <= maxSlideSteps; ++s) {
+                int nextX = curX + sdx;
+                int nextY = curY + sdy;
+                if (!Bomb::canSlideTo(m_world, nextX, nextY)) {
+                    break;
+                }
+                curX = nextX;
+                curY = nextY;
+                float slideDanger = std::clamp(std::max(tNorm, 0.72f - 0.04f * s), 0.25f, 1.0f);
+                setPixel(3, curX, curY, slideDanger);
+            }
+            if (curX != ex || curY != ey) {
+                projectBlastFrom(curX, curY, tNorm);
+            }
+        }
+    }
+
+    // Imminent Sudden Death spiral danger projection into Channel 3 (danger)
+    auto sdTiles = m_suddenDeathSystem.getImminentDangerTiles(90);
+    for (const auto& sdt : sdTiles) {
+        float sdUrgency = std::clamp(1.0f - (static_cast<float>(sdt.ticksUntilDrop) / 95.0f), 0.25f, 1.0f);
+        setPixel(3, sdt.x, sdt.y, sdUrgency);
+    }
+}
+
+std::vector<float> Game::getState(int playerId) const {
+    const Board& board = m_world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+    int channels = 10;
+
+    std::vector<float> state(channels * width * height, 0.0f);
+    fillState(playerId, state.data());
+    return state;
+}
+
+StepResult Game::step(int playerId, Command action, const std::vector<PlayerCommand>& extraCommands) {
+    StepResult result;
+    result.isDone = false;
+    result.reward = -0.01f;
+
+    const Player* player = m_world.getPlayer(playerId);
+    bool wasAlive = player && player->isAlive();
+    int oldX = wasAlive ? player->getX() : -1;
+    int oldY = wasAlive ? player->getY() : -1;
+    int livesBefore = wasAlive ? player->getLives() : 0;
+    int maxBombsBefore = wasAlive ? player->getMaxBombs() : 0;
+    int radiusBefore = wasAlive ? player->getBombRadius() : 0;
+    int speedBefore = wasAlive ? player->getSpeedLevel() : 0;
+    bool hammerBefore = wasAlive ? player->hasHammer() : false;
+    bool ringBefore = wasAlive ? player->hasRing() : false;
+    int bombsOwnedBefore = m_world.countBombsForOwner(playerId);
+
+    int slidingBefore = 0;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            const auto* b = static_cast<const Bomb*>(entity.get());
+            if (b->isSliding() && b->getCreditOwnerId() == playerId) slidingBefore++;
+        }
+    }
+
+    m_world.popWallsDestroyed(playerId);
+    m_world.popEnemiesHit(playerId);
+    m_world.popEnemiesKilled(playerId);
+
+    std::vector<PlayerCommand> commands;
+    if (action != Command::NONE) commands.push_back({playerId, action});
+    for (const auto& ec : extraCommands) {
+        if (ec.playerId != playerId && ec.command != Command::NONE) {
+            commands.push_back(ec);
+        }
+    }
+    update(commands);
+
+    if (action == Command::PLACE_BOMB && m_world.countBombsForOwner(playerId) > bombsOwnedBefore) {
+        result.bombPlaced = true;
+    }
+
+    int slidingAfter = 0;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            const auto* b = static_cast<const Bomb*>(entity.get());
+            if (b->isSliding() && b->getCreditOwnerId() == playerId) slidingAfter++;
+        }
+    }
+    if (slidingAfter > slidingBefore) {
+        result.bombPushed = true;
+    }
+
+    int wallsDestroyedByPlayer = m_world.popWallsDestroyed(playerId);
+    result.wallsDestroyed = wallsDestroyedByPlayer;
+    if (wallsDestroyedByPlayer > 0) result.reward += wallsDestroyedByPlayer * 3.0f;
+
+    player = m_world.getPlayer(playerId);
+    bool isAliveNow = player && player->isAlive();
+
+    if (isAliveNow) {
+        result.moved = (player->getX() != oldX || player->getY() != oldY);
+        if (player->getLives() < livesBefore) {
+            result.livesLost = (livesBefore - player->getLives());
+            result.reward -= result.livesLost * 25.0f;
+        }
+
+        int powerUpsGained = 0;
+        if (player->getMaxBombs() > maxBombsBefore) powerUpsGained++;
+        if (player->getBombRadius() > radiusBefore) powerUpsGained++;
+        if (player->getSpeedLevel() > speedBefore) powerUpsGained++;
+        if (player->hasHammer() && !hammerBefore) powerUpsGained++;
+        if (player->hasRing() && !ringBefore) powerUpsGained++;
+
+        result.powerUpsCollected = powerUpsGained;
+        if (powerUpsGained > 0) result.reward += powerUpsGained * 8.0f;
+    } else if (wasAlive) {
+        result.livesLost = livesBefore;
+        result.reward -= result.livesLost * 25.0f;
+    }
+
+    int enemiesHitByPlayer = m_world.popEnemiesHit(playerId);
+    if (enemiesHitByPlayer > 0) {
+        result.enemiesHit = enemiesHitByPlayer;
+        result.reward += result.enemiesHit * 10.0f;
+    }
+
+    int enemiesKilledByPlayer = m_world.popEnemiesKilled(playerId);
+    if (enemiesKilledByPlayer > 0) {
+        result.enemiesKilled = enemiesKilledByPlayer;
+        result.reward += result.enemiesKilled * 20.0f;
+    }
+
+    result.isDone = isGameOver();
+    if (wasAlive && !isAliveNow) {
+        result.died = true;
+        result.reward -= 100.0f;
+        result.isDone = true;
+    } else if (result.isDone && isAliveNow) {
+        result.won = true;
+        result.reward += 100.0f;
+    }
+
+    return result;
+}
+
+std::vector<PowerUpInfo> Game::getPowerUps() const {
+    std::vector<PowerUpInfo> powerUps;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::POWER_UP) {
+            PowerUpInfo pui;
+            pui.x = entity->getX();
+            pui.y = entity->getY();
+            pui.type = entity->getDisplayChar(); 
+            powerUps.push_back(pui);
+        }
+    }
+    return powerUps;
+}
+
+std::vector<FlameInfo> Game::getFlames() const {
+    std::vector<FlameInfo> flames;
+    for (const auto& entity : m_world.getEntities()) {
+        if (entity->isAlive() && entity->getType() == EntityType::FLAME) {
+            const auto* flame = static_cast<const Flame*>(entity.get());
+            FlameInfo fi;
+            fi.x = flame->getX();
+            fi.y = flame->getY();
+            fi.timer = flame->getTimer();
+            fi.ownerId = flame->getOwnerId();
+            flames.push_back(fi);
+        }
+    }
+    return flames;
+}
+
+std::vector<std::vector<int>> Game::getBoardGrid() const {
+    const Board& board = m_world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+    std::vector<std::vector<int>> grid(height, std::vector<int>(width, 0));
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            CellType ct = board.getCellType(x, y);
+            if (ct == CellType::SOLID_WALL) {
+                grid[y][x] = 1;
+            } else if (ct == CellType::BREAKABLE_WALL) {
+                grid[y][x] = 2;
+            }
+        }
+    }
+    return grid;
+}
+
+
+================================================================================
+FILE: src/core/World.cpp
+================================================================================
+#include "../../include/core/World.h"
+#include "../../include/entities/Player.h"
+#include "../../include/entities/Bomb.h"
+#include <algorithm>
+
+World::World(int width, int height) : m_board(width, height) {}
+
+Board& World::getBoard() { return m_board; }
+const Board& World::getBoard() const { return m_board; }
+
+const std::vector<std::unique_ptr<Entity>>& World::getEntities() const {
+    return m_entities;
+}
+
+const std::vector<std::unique_ptr<Entity>>& World::getSpawnQueue() const {
+    return m_spawnQueue;
+}
+
+std::vector<Entity*> World::getEntitiesAt(int x, int y) const {
+    std::vector<Entity*> result;
+    for (const auto& entity : m_entities) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y) {
+            result.push_back(entity.get());
+        }
+    }
+    for (const auto& entity : m_spawnQueue) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y) {
+            result.push_back(entity.get());
+        }
+    }
+    return result;
+}
+
+void World::addEntity(std::unique_ptr<Entity> entity) {
+    if (entity) {
+        m_spawnQueue.push_back(std::move(entity));
+    }
+}
+
+void World::sync() {
+    for (auto& entity : m_spawnQueue) {
+        m_entities.push_back(std::move(entity));
+    }
+    m_spawnQueue.clear();
+
+    m_entities.erase(
+        std::remove_if(m_entities.begin(), m_entities.end(),
+            [](const std::unique_ptr<Entity>& entity) {
+                return !entity->isAlive();
+            }),
+        m_entities.end()
+    );
+}
+
+bool World::isPositionValid(int x, int y) const {
+    return x >= 0 && x < m_board.getWidth() && y >= 0 && y < m_board.getHeight();
+}
+
+bool World::isTileFree(int x, int y) const {
+    if (!isPositionValid(x, y)) {
+        return false;
+    }
+
+    if (m_board.getCellType(x, y) != CellType::EMPTY) {
+        return false;
+    }
+
+    for (const auto& entity : m_entities) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y && entity->isSolid()) {
+            return false;
+        }
+    }
+    for (const auto& entity : m_spawnQueue) {
+        if (entity->isAlive() && entity->getX() == x && entity->getY() == y && entity->isSolid()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int World::countBombsForOwner(int ownerId) const {
+    int count = 0;
+    for (const auto& entity : m_entities) {
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) count++;
+        }
+    }
+    for (const auto& entity : m_spawnQueue) {
+        if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+            if (static_cast<const Bomb*>(entity.get())->getOwnerId() == ownerId) count++;
+        }
+    }
+    return count;
+}
+
+Player* World::getPlayer(int id) {
+    for (auto& e : m_entities) {
+        if (e->isAlive() && e->getType() == EntityType::PLAYER) {
+            auto* p = static_cast<Player*>(e.get());
+            if (p->getId() == id) return p;
+        }
+    }
+    return nullptr;
+}
+
+const Player* World::getPlayer(int id) const {
+    for (const auto& e : m_entities) {
+        if (e->isAlive() && e->getType() == EntityType::PLAYER) {
+            const auto* p = static_cast<const Player*>(e.get());
+            if (p->getId() == id) return p;
+        }
+    }
+    return nullptr;
+}
+
+void World::clear() {
+    m_entities.clear();
+    m_spawnQueue.clear();
+    m_wallsDestroyedByOwner.clear();
+    m_enemiesKilledByOwner.clear();
+    m_enemiesHitByOwner.clear();
+
+    int width = m_board.getWidth();
+    int height = m_board.getHeight();
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            m_board.setCellType(x, y, CellType::EMPTY);
+        }
+    }
+}
+
+int World::countBreakableWalls() const {
+    int count = 0;
+    int width = m_board.getWidth();
+    int height = m_board.getHeight();
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            if (m_board.getCellType(x, y) == CellType::BREAKABLE_WALL) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+void World::recordWallDestroyed(int ownerId) {
+    if (ownerId > 0) {
+        m_wallsDestroyedByOwner[ownerId]++;
+    }
+}
+
+int World::popWallsDestroyed(int ownerId) {
+    auto it = m_wallsDestroyedByOwner.find(ownerId);
+    if (it == m_wallsDestroyedByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
+    return count;
+}
+
+void World::recordEnemyKilled(int ownerId) {
+    if (ownerId > 0) {
+        m_enemiesKilledByOwner[ownerId]++;
+    }
+}
+
+int World::popEnemiesKilled(int ownerId) {
+    auto it = m_enemiesKilledByOwner.find(ownerId);
+    if (it == m_enemiesKilledByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
+    return count;
+}
+
+void World::recordEnemyHit(int ownerId) {
+    if (ownerId > 0) {
+        m_enemiesHitByOwner[ownerId]++;
+    }
+}
+
+int World::popEnemiesHit(int ownerId) {
+    auto it = m_enemiesHitByOwner.find(ownerId);
+    if (it == m_enemiesHitByOwner.end()) {
+        return 0;
+    }
+    int count = it->second;
+    it->second = 0;
+    return count;
+}
+
+
+================================================================================
+FILE: src/entities/Bomb.cpp
+================================================================================
+#include "../../include/entities/Bomb.h"
+#include "../../include/core/World.h"
+
+Bomb::Bomb(int x, int y, int timer, int radius, int ownerId)
+    : Entity(x, y),
+      m_timer(timer),
+      m_radius(radius),
+      m_ownerId(ownerId),
+      m_creditOwnerId(ownerId) {}
+
+int Bomb::getRadius() const { return m_radius; }
+int Bomb::getOwnerId() const { return m_ownerId; }
+int Bomb::getCreditOwnerId() const { return m_creditOwnerId; }
+int Bomb::getTimer() const { return m_timer; }
+bool Bomb::isSliding() const { return m_dx != 0 || m_dy != 0; }
+int Bomb::getSlideDx() const { return m_dx; }
+int Bomb::getSlideDy() const { return m_dy; }
+int Bomb::getSlideCooldown() const { return m_slideCooldown; }
+
+EntityType Bomb::getType() const {
+    return EntityType::BOMB;
+}
+
+char Bomb::getDisplayChar() const {
+    return '@';
+}
+
+bool Bomb::canSlideTo(const World& world, int x, int y) {
+    if (!world.isTileFree(x, y)) {
+        return false;
+    }
+    for (const auto* e : world.getEntitiesAt(x, y)) {
+        if (e->isAlive() && (e->getType() == EntityType::PLAYER || e->getType() == EntityType::FLAME)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Bomb::update(World& world) {
+    if (m_dx != 0 || m_dy != 0) {
+        if (m_slideCooldown > 0) {
+            m_slideCooldown--;
+        } else {
+            int nextX = getX() + m_dx;
+            int nextY = getY() + m_dy;
+            if (canSlideTo(world, nextX, nextY)) {
+                setX(nextX);
+                setY(nextY);
+                m_slideCooldown = SLIDE_COOLDOWN_FRAMES;
+            } else {
+                m_dx = 0;
+                m_dy = 0;
+                m_slideCooldown = 0;
+            }
+        }
+    }
+
+    if (!isAlive()) return;
+    if (m_timer > 0) {
+        m_timer--;
+    }
+}
+
+bool Bomb::isSolid() const {
+    return true;
+}
+
+bool Bomb::stopsExplosion() const {
+    return true;
+}
+
+bool Bomb::shouldExplode() const {
+    return isAlive() && m_timer <= 0;
+}
+
+void Bomb::onExplosionHit(World& /*world*/) {
+    if (isAlive()) {
+        m_timer = 0;
+    }
+}
+
+void Bomb::push(int dx, int dy, int pusherId) {
+    m_dx = dx;
+    m_dy = dy;
+    m_slideCooldown = 0;
+    if (pusherId > 0) {
+        m_creditOwnerId = pusherId;
+    }
+}
+
+
+================================================================================
+FILE: src/entities/BombPowerUp.cpp
+================================================================================
+#include "../../include/entities/BombPowerUp.h"
+#include "../../include/entities/Player.h"
+
+BombPowerUp::BombPowerUp(int x, int y) : PowerUp(x, y) {}
+
+void BombPowerUp::apply(Player& player) {
+    player.increaseMaxBombs();
+}
+
+char BombPowerUp::getDisplayChar() const {
+    return '+';
+}
+
+================================================================================
+FILE: src/entities/BreakableWall.cpp
+================================================================================
+#include "../../include/entities/BreakableWall.h"
+#include "../../include/factories/PowerUpFactory.h"
+
+BreakableWall::BreakableWall(int x, int y) : Entity(x, y) {}
+
+EntityType BreakableWall::getType() const {
+    return EntityType::BREAKABLE_WALL;
+}
+
+char BreakableWall::getDisplayChar() const { return 'B'; }
+
+void BreakableWall::update(World& /*world*/) {
+}
+
+bool BreakableWall::isSolid() const {
+    return true;
+}
+
+bool BreakableWall::stopsExplosion() const {
+    return true;
+}
+
+void BreakableWall::onExplosionHit(World& world) {
+    if (isAlive()) {
+        destroy();
+        PowerUpFactory::trySpawn(world, getX(), getY());
+    }
+}
+
+
+================================================================================
+FILE: src/entities/DumbBot.cpp
+================================================================================
+#include "../../include/entities/DumbBot.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/Bomb.h"
+#include <cstdlib>
+#include <vector>
+#include <queue>
+#include <cmath>
+#include <algorithm>
+
+namespace {
+Command getOppositeCommand(Command cmd) {
+    switch (cmd) {
+        case Command::UP:    return Command::DOWN;
+        case Command::DOWN:  return Command::UP;
+        case Command::LEFT:  return Command::RIGHT;
+        case Command::RIGHT: return Command::LEFT;
+        default:             return Command::NONE;
+    }
+}
+} // namespace
+
+DumbBot::DumbBot(int startX, int startY, int id)
+    : Player(startX, startY, id) {}
+
+bool DumbBot::isBot() const { return true; }
+std::string DumbBot::getDisplayName() const { return "BOT" + std::to_string(getId()); }
+
+char DumbBot::getDisplayChar() const {
+    if (Player::getDisplayChar() == ' ') return ' ';
+    return 'D';
+}
+
+bool DumbBot::canStepOn(int x, int y, const World& world) const {
+    if (!world.isPositionValid(x, y)) return false;
+    if (world.getBoard().getCellType(x, y) != CellType::EMPTY) return false;
+
+    for (const auto* e : world.getEntitiesAt(x, y)) {
+        if (!e->isAlive()) continue;
+        if (e->getType() == EntityType::FLAME) {
+            return false;
+        }
+        if (e->isSolid()) {
+            if (e->getType() == EntityType::BOMB) {
+                const auto* bomb = static_cast<const Bomb*>(e);
+                if (!hasRing() || hasHammer() || bomb->getTimer() <= 20) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool DumbBot::hasClearBlastPath(int bx, int by, int tx, int ty, const World& world) const {
+    int dx = (tx > bx) ? 1 : ((tx < bx) ? -1 : 0);
+    int dy = (ty > by) ? 1 : ((ty < by) ? -1 : 0);
+
+    int cx = bx + dx;
+    int cy = by + dy;
+    while (cx != tx || cy != ty) {
+        if (world.getBoard().getCellType(cx, cy) != CellType::EMPTY) return false;
+        auto entities = world.getEntitiesAt(cx, cy);
+        for (const auto* e : entities) {
+            if (e->isAlive() && e->stopsExplosion() && e->getType() != EntityType::BOMB) {
+                return false;
+            }
+        }
+        cx += dx;
+        cy += dy;
+    }
+    return true;
+}
+
+int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx, int extraBy, int extraRadius) const {
+    if (!world.isPositionValid(x, y)) return 0;
+
+    struct BombData {
+        int x;
+        int y;
+        int radius;
+        int timer;
+    };
+    std::vector<BombData> bombs;
+
+    auto collectFromList = [&](const std::vector<std::unique_ptr<Entity>>& list) {
+        for (const auto& entity : list) {
+            if (!entity->isAlive()) continue;
+            if (entity->getType() == EntityType::FLAME) {
+                if (entity->getX() == x && entity->getY() == y) {
+                    return true;
+                }
+            } else if (entity->getType() == EntityType::BOMB) {
+                const auto* b = static_cast<const Bomb*>(entity.get());
+                bombs.push_back({b->getX(), b->getY(), b->getRadius(), b->getTimer()});
+                if (b->isSliding()) {
+                    int sdx = b->getSlideDx();
+                    int sdy = b->getSlideDy();
+                    int sx = b->getX();
+                    int sy = b->getY();
+                    for (int s = 1; s <= 4; ++s) {
+                        int nx = sx + sdx;
+                        int ny = sy + sdy;
+                        if (!Bomb::canSlideTo(world, nx, ny)) break;
+                        sx = nx;
+                        sy = ny;
+                        bombs.push_back({sx, sy, b->getRadius(), std::max(1, b->getTimer())});
+                    }
+                }
+            }
+        }
+        return false;
+    };
+
+    if (collectFromList(world.getEntities()) || collectFromList(world.getSpawnQueue())) {
+        return 0;
+    }
+
+    if (extraBx >= 0 && extraBy >= 0) {
+        bombs.push_back({extraBx, extraBy, extraRadius, DEFAULT_BOMB_TIMER});
+    }
+
+    if (bombs.empty()) return 9999;
+
+    // Propagate chain-reaction timers across bombs in line-of-fire
+    bool changed = true;
+    int maxIter = static_cast<int>(bombs.size()) + 1;
+    while (changed && maxIter-- > 0) {
+        changed = false;
+        for (size_t i = 0; i < bombs.size(); ++i) {
+            for (size_t j = 0; j < bombs.size(); ++j) {
+                if (i == j) continue;
+                bool alignedX = (bombs[i].x == bombs[j].x && std::abs(bombs[i].y - bombs[j].y) <= bombs[i].radius);
+                bool alignedY = (bombs[i].y == bombs[j].y && std::abs(bombs[i].x - bombs[j].x) <= bombs[i].radius);
+                if ((alignedX || alignedY) && bombs[i].timer < bombs[j].timer) {
+                    if (hasClearBlastPath(bombs[i].x, bombs[i].y, bombs[j].x, bombs[j].y, world)) {
+                        bombs[j].timer = bombs[i].timer;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    int minTimer = 9999;
+    for (const auto& b : bombs) {
+        if (b.x == x && std::abs(b.y - y) <= b.radius) {
+            if (hasClearBlastPath(b.x, b.y, x, y, world)) {
+                minTimer = std::min(minTimer, b.timer);
+            }
+        }
+        if (b.y == y && std::abs(b.x - x) <= b.radius) {
+            if (hasClearBlastPath(b.x, b.y, x, y, world)) {
+                minTimer = std::min(minTimer, b.timer);
+            }
+        }
+    }
+    return minTimer;
+}
+
+bool DumbBot::isTileDangerous(int x, int y, const World& world) const {
+    return getTileTimeToExplode(x, y, world) < 9999;
+}
+
+bool DumbBot::isTileDangerousWithExtraBomb(int x, int y, const World& world, int extraBx, int extraBy, int extraRadius) const {
+    return getTileTimeToExplode(x, y, world, extraBx, extraBy, extraRadius) < 9999;
+}
+
+Command DumbBot::findEscapeDirection(const World& world, int extraBx, int extraBy, int extraRadius) const {
+    int width = world.getBoard().getWidth();
+    int height = world.getBoard().getHeight();
+    int startX = getX();
+    int startY = getY();
+    int moveCd = getMoveCooldownMax();
+
+    struct StepNode {
+        int x;
+        int y;
+        Command firstCommand;
+        int dist;
+    };
+
+    std::vector<std::vector<bool>> visited(width, std::vector<bool>(height, false));
+    std::queue<StepNode> q;
+    visited[startX][startY] = true;
+
+    struct DirInfo { int dx; int dy; Command cmd; };
+    const DirInfo baseDirs[4] = {
+        {0, -1, Command::UP},
+        {0, 1, Command::DOWN},
+        {-1, 0, Command::LEFT},
+        {1, 0, Command::RIGHT}
+    };
+
+    // Order directions so m_currentDir is evaluated first (committing to active escape path),
+    // and the opposite direction is evaluated last (avoiding oscillation).
+    std::vector<DirInfo> orderedDirs;
+    orderedDirs.reserve(4);
+    Command oppositeDir = getOppositeCommand(m_currentDir);
+    for (const auto& d : baseDirs) {
+        if (d.cmd == m_currentDir) orderedDirs.push_back(d);
+    }
+    for (const auto& d : baseDirs) {
+        if (d.cmd != m_currentDir && d.cmd != oppositeDir) orderedDirs.push_back(d);
+    }
+    for (const auto& d : baseDirs) {
+        if (d.cmd == oppositeDir && d.cmd != m_currentDir) orderedDirs.push_back(d);
+    }
+
+    const int maxEscapeSteps = (extraBx >= 0) ? 3 : 6;
+
+    for (const auto& d : orderedDirs) {
+        int nx = startX + d.dx;
+        int ny = startY + d.dy;
+        if (canStepOn(nx, ny, world)) {
+            int tte = getTileTimeToExplode(nx, ny, world, extraBx, extraBy, extraRadius);
+            if (tte == 9999) {
+                return d.cmd;
+            }
+            if (tte > moveCd + 3) {
+                visited[nx][ny] = true;
+                q.push({nx, ny, d.cmd, 1});
+            }
+        }
+    }
+
+    while (!q.empty()) {
+        StepNode curr = q.front();
+        q.pop();
+
+        if (curr.dist >= maxEscapeSteps) continue;
+
+        for (const auto& d : orderedDirs) {
+            int nx = curr.x + d.dx;
+            int ny = curr.y + d.dy;
+            if (world.isPositionValid(nx, ny) && !visited[nx][ny] && canStepOn(nx, ny, world)) {
+                int nextDist = curr.dist + 1;
+                int tte = getTileTimeToExplode(nx, ny, world, extraBx, extraBy, extraRadius);
+                visited[nx][ny] = true;
+                if (tte == 9999) {
+                    return curr.firstCommand;
+                }
+                if (tte > nextDist * moveCd + 3) {
+                    q.push({nx, ny, curr.firstCommand, nextDist});
+                }
+            }
+        }
+    }
+
+    return Command::NONE;
+}
+
+Command DumbBot::findExplorationDirection(const World& world) const {
+    int cx = getX();
+    int cy = getY();
+
+    struct DirInfo { int dx; int dy; Command cmd; };
+    const DirInfo baseDirs[4] = {
+        {0, -1, Command::UP},
+        {0, 1, Command::DOWN},
+        {-1, 0, Command::LEFT},
+        {1, 0, Command::RIGHT}
+    };
+
+    Command oppositeDir = getOppositeCommand(m_currentDir);
+    std::vector<Command> safeMoves;
+    std::vector<Command> forwardSafeMoves;
+
+    for (const auto& d : baseDirs) {
+        int nx = cx + d.dx;
+        int ny = cy + d.dy;
+        if (canStepOn(nx, ny, world) && !isTileDangerous(nx, ny, world)) {
+            // Immediate priority: step onto adjacent power-up
+            for (const auto* e : world.getEntitiesAt(nx, ny)) {
+                if (e->isAlive() && e->getType() == EntityType::POWER_UP) {
+                    return d.cmd;
+                }
+            }
+            safeMoves.push_back(d.cmd);
+            if (d.cmd != oppositeDir) {
+                forwardSafeMoves.push_back(d.cmd);
+            }
+        }
+    }
+
+    if (safeMoves.empty()) {
+        return Command::NONE;
+    }
+
+    // If this bot already has an active bomb on the board and is standing on a safe tile,
+    // wait calmly for the bomb to detonate (only stepping 1 tile further if directly adjacent to a blast line).
+    if (world.countBombsForOwner(getId()) > 0) {
+        auto countDangerousNeighbors = [&](int tx, int ty) {
+            int count = 0;
+            for (const auto& d : baseDirs) {
+                int wx = tx + d.dx;
+                int wy = ty + d.dy;
+                if (world.isPositionValid(wx, wy) && isTileDangerous(wx, wy, world)) {
+                    count++;
+                }
+            }
+            return count;
+        };
+
+        int curDangerAdj = countDangerousNeighbors(cx, cy);
+        if (curDangerAdj > 0) {
+            for (const auto& d : baseDirs) {
+                int nx = cx + d.dx;
+                int ny = cy + d.dy;
+                if (canStepOn(nx, ny, world) && !isTileDangerous(nx, ny, world)) {
+                    if (countDangerousNeighbors(nx, ny) == 0) {
+                        return d.cmd;
+                    }
+                }
+            }
+        }
+        return Command::NONE;
+    }
+
+    // Run a safe-BFS (depth <= 10) to locate the nearest reachable power-up, breakable wall, or open space
+    int width = world.getBoard().getWidth();
+    int height = world.getBoard().getHeight();
+    std::vector<std::vector<bool>> visited(width, std::vector<bool>(height, false));
+    struct Node { int x; int y; Command firstCmd; int dist; };
+    std::queue<Node> q;
+    visited[cx][cy] = true;
+    int reachableSafeCount = 1;
+
+    std::vector<DirInfo> orderedDirs;
+    for (const auto& d : baseDirs) {
+        if (d.cmd == m_currentDir) orderedDirs.push_back(d);
+    }
+    for (const auto& d : baseDirs) {
+        if (d.cmd != m_currentDir && d.cmd != oppositeDir) orderedDirs.push_back(d);
+    }
+    for (const auto& d : baseDirs) {
+        if (d.cmd == oppositeDir && d.cmd != m_currentDir) orderedDirs.push_back(d);
+    }
+
+    for (const auto& d : orderedDirs) {
+        int nx = cx + d.dx;
+        int ny = cy + d.dy;
+        if (canStepOn(nx, ny, world) && !isTileDangerous(nx, ny, world)) {
+            visited[nx][ny] = true;
+            reachableSafeCount++;
+            q.push({nx, ny, d.cmd, 1});
+        }
+    }
+
+    Command wallTargetCmd = Command::NONE;
+    Command enemyTargetCmd = Command::NONE;
+    while (!q.empty()) {
+        Node curr = q.front();
+        q.pop();
+
+        for (const auto* e : world.getEntitiesAt(curr.x, curr.y)) {
+            if (e->isAlive() && e->getType() == EntityType::POWER_UP) {
+                return curr.firstCmd;
+            }
+        }
+
+        if (enemyTargetCmd == Command::NONE) {
+            for (const auto& entity : world.getEntities()) {
+                if (entity->isAlive() && entity->getType() == EntityType::PLAYER && entity.get() != this) {
+                    int dist = std::abs(entity->getX() - curr.x) + std::abs(entity->getY() - curr.y);
+                    if (dist <= 2) {
+                        enemyTargetCmd = curr.firstCmd;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (wallTargetCmd == Command::NONE) {
+            for (const auto& d : baseDirs) {
+                int wx = curr.x + d.dx;
+                int wy = curr.y + d.dy;
+                if (world.isPositionValid(wx, wy) &&
+                    world.getBoard().getCellType(wx, wy) == CellType::BREAKABLE_WALL) {
+                    wallTargetCmd = curr.firstCmd;
+                    break;
+                }
+            }
+        }
+
+        if (curr.dist >= 12) continue;
+
+        for (const auto& d : orderedDirs) {
+            int nx = curr.x + d.dx;
+            int ny = curr.y + d.dy;
+            if (world.isPositionValid(nx, ny) && !visited[nx][ny] &&
+                canStepOn(nx, ny, world) && !isTileDangerous(nx, ny, world)) {
+                visited[nx][ny] = true;
+                reachableSafeCount++;
+                q.push({nx, ny, curr.firstCmd, curr.dist + 1});
+            }
+        }
+    }
+
+    // If already positioned next to a breakable wall with a valid escape route (waiting on warmup,
+    // bomb cooldown, or a nearby bomb to clear) and no power-up is reachable, hold position instead of pacing.
+    bool currentlyNearWall = false;
+    for (const auto& d : baseDirs) {
+        int wx = cx + d.dx;
+        int wy = cy + d.dy;
+        if (world.isPositionValid(wx, wy) &&
+            world.getBoard().getCellType(wx, wy) == CellType::BREAKABLE_WALL) {
+            currentlyNearWall = true;
+            break;
+        }
+    }
+    if (currentlyNearWall && findEscapeDirection(world, cx, cy, getBombRadius()) != Command::NONE) {
+        return Command::NONE;
+    }
+
+    Command primaryTargetCmd = (wallTargetCmd != Command::NONE) ? wallTargetCmd : enemyTargetCmd;
+
+    // If temporarily confined to a small safe pocket (<= 3 tiles) with no targets inside
+    // (e.g. waiting for another player's bomb blast to clear), stand still instead of pacing back and forth.
+    if (primaryTargetCmd == Command::NONE && reachableSafeCount <= 3) {
+        return Command::NONE;
+    }
+
+    if (primaryTargetCmd != Command::NONE) {
+        if (std::find(forwardSafeMoves.begin(), forwardSafeMoves.end(), primaryTargetCmd) != forwardSafeMoves.end() ||
+            forwardSafeMoves.empty()) {
+            return primaryTargetCmd;
+        }
+    }
+
+    if (forwardSafeMoves.size() == 1) {
+        return forwardSafeMoves[0];
+    }
+
+    if (!forwardSafeMoves.empty()) {
+        if (std::find(forwardSafeMoves.begin(), forwardSafeMoves.end(), m_currentDir) != forwardSafeMoves.end() &&
+            (std::rand() % 100 < 85)) {
+            return m_currentDir;
+        }
+        return forwardSafeMoves[std::rand() % forwardSafeMoves.size()];
+    }
+
+    return safeMoves[0];
+}
+
+void DumbBot::update(World& world) {
+    Player::update(world);
+    m_ticksAlive++;
+    if (m_bombCooldown > 0) m_bombCooldown--;
+
+    if (!isAlive() || isOnCooldown()) return;
+
+    int cx = getX();
+    int cy = getY();
+    bool amIDangerous = isTileDangerous(cx, cy, world);
+
+    if (amIDangerous) {
+        Command escapeDir = findEscapeDirection(world);
+        if (escapeDir != Command::NONE) {
+            m_currentDir = escapeDir;
+            handleCommand(m_currentDir, world);
+            return;
+        }
+
+        // If trapped by an adjacent bomb and we have Hammer or Ring, kick or cross the bomb to escape
+        struct DirInfo { int dx; int dy; Command cmd; };
+        const DirInfo dirs[4] = {
+            {0, -1, Command::UP},
+            {0, 1, Command::DOWN},
+            {-1, 0, Command::LEFT},
+            {1, 0, Command::RIGHT}
+        };
+        if (hasHammer() || hasRing()) {
+            for (const auto& d : dirs) {
+                int nx = cx + d.dx;
+                int ny = cy + d.dy;
+                if (!world.isPositionValid(nx, ny)) continue;
+                for (const auto* e : world.getEntitiesAt(nx, ny)) {
+                    if (e->isAlive() && e->getType() == EntityType::BOMB) {
+                        bool canKick = hasHammer() && Bomb::canSlideTo(world, nx + d.dx, ny + d.dy);
+                        bool canCross = hasRing() && !canKick;
+                        if (canKick || canCross) {
+                            m_currentDir = d.cmd;
+                            handleCommand(m_currentDir, world);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Otherwise step to the neighbor with the longest survival time
+        int bestTte = getTileTimeToExplode(cx, cy, world);
+        Command bestCmd = Command::NONE;
+        int moveCd = getMoveCooldownMax();
+        for (const auto& d : dirs) {
+            int nx = cx + d.dx;
+            int ny = cy + d.dy;
+            if (canStepOn(nx, ny, world)) {
+                int tte = getTileTimeToExplode(nx, ny, world);
+                if (tte > bestTte || (tte == bestTte && d.cmd == m_currentDir && bestTte > moveCd)) {
+                    bestTte = tte;
+                    bestCmd = d.cmd;
+                }
+            }
+        }
+        if (bestCmd != Command::NONE) {
+            m_currentDir = bestCmd;
+            handleCommand(m_currentDir, world);
+        }
+        return;
+    }
+
+    // Offensive Hammer kick: if an adjacent bomb can be kicked toward an aligned enemy or wall, kick it
+    if (hasHammer()) {
+        struct KickDir { int dx; int dy; Command cmd; };
+        const KickDir kDirs[4] = {
+            {0, -1, Command::UP},
+            {0, 1, Command::DOWN},
+            {-1, 0, Command::LEFT},
+            {1, 0, Command::RIGHT}
+        };
+        for (const auto& d : kDirs) {
+            int bx = cx + d.dx;
+            int by = cy + d.dy;
+            if (!world.isPositionValid(bx, by) || !Bomb::canSlideTo(world, bx + d.dx, by + d.dy)) continue;
+            bool hasBombAtB = false;
+            for (const auto* e : world.getEntitiesAt(bx, by)) {
+                if (e->isAlive() && e->getType() == EntityType::BOMB) {
+                    hasBombAtB = true;
+                    break;
+                }
+            }
+            if (!hasBombAtB) continue;
+
+            bool targetAhead = false;
+            for (int dist = 2; dist <= 6; ++dist) {
+                int tx = cx + d.dx * dist;
+                int ty = cy + d.dy * dist;
+                if (!world.isPositionValid(tx, ty)) break;
+                CellType ct = world.getBoard().getCellType(tx, ty);
+                if (ct == CellType::SOLID_WALL) break;
+                if (ct == CellType::BREAKABLE_WALL) {
+                    targetAhead = true;
+                    break;
+                }
+                for (const auto* e : world.getEntitiesAt(tx, ty)) {
+                    if (e->isAlive() && e->getType() == EntityType::PLAYER && e != this) {
+                        targetAhead = true;
+                        break;
+                    }
+                }
+                if (targetAhead) break;
+            }
+            if (targetAhead) {
+                m_currentDir = d.cmd;
+                handleCommand(m_currentDir, world);
+                return;
+            }
+        }
+    }
+
+    // Evaluate strategic bomb placement only when safe, warmed up, off bomb cooldown, and having no active bomb out
+    if (m_ticksAlive >= SPAWN_BOMB_WARMUP_TICKS &&
+        m_bombCooldown == 0 &&
+        canPlaceBomb(world) &&
+        world.countBombsForOwner(getId()) == 0) {
+
+        // Avoid dropping a second bomb right next to another ticking bomb (prevents multi-bot corridor corking)
+        bool bombNearby = false;
+        for (const auto& entity : world.getEntities()) {
+            if (entity->isAlive() && entity->getType() == EntityType::BOMB) {
+                int dist = std::abs(entity->getX() - cx) + std::abs(entity->getY() - cy);
+                if (dist <= 4) {
+                    bombNearby = true;
+                    break;
+                }
+            }
+        }
+
+        if (!bombNearby) {
+            auto isBreakableWall = [&](int nx, int ny) {
+                if (!world.isPositionValid(nx, ny)) return false;
+                return world.getBoard().getCellType(nx, ny) == CellType::BREAKABLE_WALL;
+            };
+
+            bool nearWall = isBreakableWall(cx + 1, cy) || isBreakableWall(cx - 1, cy) ||
+                            isBreakableWall(cx, cy + 1) || isBreakableWall(cx, cy - 1);
+
+            bool nearEnemy = false;
+            for (const auto& entity : world.getEntities()) {
+                if (entity->isAlive() && entity->getType() == EntityType::PLAYER && entity.get() != this) {
+                    int dist = std::abs(entity->getX() - cx) + std::abs(entity->getY() - cy);
+                    if (dist <= 2) {
+                        nearEnemy = true;
+                        break;
+                    }
+                }
+            }
+
+            if (nearWall || nearEnemy) {
+                Command escapeDir = findEscapeDirection(world, cx, cy, getBombRadius());
+                if (escapeDir != Command::NONE) {
+                    handleCommand(Command::PLACE_BOMB, world);
+                    m_bombCooldown = BOMB_PLACEMENT_COOLDOWN;
+                    m_currentDir = escapeDir;
+                    handleCommand(m_currentDir, world);
+                    return;
+                }
+            }
+        }
+    }
+
+    Command moveDir = findExplorationDirection(world);
+    if (moveDir != Command::NONE) {
+        m_currentDir = moveDir;
+        handleCommand(m_currentDir, world);
+    } else {
+        m_currentDir = Command::NONE;
+    }
+}
+
+
+================================================================================
+FILE: src/entities/Entity.cpp
+================================================================================
+#include "../../include/entities/Entity.h"
+
+Entity::Entity(int startX, int startY) : m_x(startX), m_y(startY), m_isAlive(true) {}
+
+int Entity::getX() const { return m_x; }
+int Entity::getY() const { return m_y; }
+void Entity::setX(int x) { m_x = x; }
+void Entity::setY(int y) { m_y = y; }
+bool Entity::isAlive() const { return m_isAlive; }
+void Entity::destroy() { m_isAlive = false; }
+
+void Entity::onExplosionHit(World& /*world*/) {
+    destroy(); 
+}
+
+
+================================================================================
+FILE: src/entities/Flame.cpp
+================================================================================
+#include "../../include/entities/Flame.h"
+#include "../../include/entities/Player.h"
+#include "../../include/entities/Bomb.h"
+#include "../../include/core/World.h"
+
+Flame::Flame(int x, int y, int timer, int ownerId)
+    : Entity(x, y), m_timer(timer), m_ownerId(ownerId), m_activeForCollision(true) {}
+
+int Flame::getOwnerId() const { return m_ownerId; }
+int Flame::getTimer() const { return m_timer; }
+
+EntityType Flame::getType() const {
+    return EntityType::FLAME;
+}
+
+char Flame::getDisplayChar() const { return '*'; }
+
+void Flame::update(World& /*world*/) {
+    if (!isAlive()) return;
+
+    m_activeForCollision = true;
+
+    if (m_timer > 0) {
+        m_timer--;
+        if (m_timer == 0) {
+            destroy();
+        }
+    }
+}
+
+void Flame::onExplosionHit(World& /*world*/) {
+    // Flames pass through other flames without being destroyed
+}
+
+void Flame::onIntersect(Entity& other, World& world) {
+    if (!isAlive() || !other.isAlive() || !m_activeForCollision) return;
+
+    if (other.getType() != EntityType::FLAME) {
+        bool isBreakable = (other.getType() == EntityType::BREAKABLE_WALL);
+        bool isPlayer = (other.getType() == EntityType::PLAYER);
+        int victimId = isPlayer ? static_cast<Player&>(other).getId() : -1;
+        int livesBefore = isPlayer ? static_cast<Player&>(other).getLives() : 0;
+
+        if (other.getType() == EntityType::BOMB && m_ownerId > 0) {
+            static_cast<Bomb&>(other).push(0, 0, m_ownerId);
+        }
+
+        other.onExplosionHit(world);
+
+        if (isBreakable && !other.isAlive() && m_ownerId > 0) {
+            world.recordWallDestroyed(m_ownerId);
+        }
+        if (isPlayer && m_ownerId > 0 && m_ownerId != victimId) {
+            int livesAfter = other.isAlive() ? static_cast<Player&>(other).getLives() : 0;
+            if (livesAfter < livesBefore) {
+                world.recordEnemyHit(m_ownerId);
+            }
+            if (!other.isAlive()) {
+                world.recordEnemyKilled(m_ownerId);
+            }
+        }
+    }
+}
+
+
+================================================================================
+FILE: src/entities/HammerPowerUp.cpp
+================================================================================
+#include "../../include/entities/HammerPowerUp.h"
+#include "../../include/entities/Player.h"
+
+HammerPowerUp::HammerPowerUp(int x, int y) : PowerUp(x, y) {}
+
+void HammerPowerUp::apply(Player& player) {
+    player.enableHammer();
+}
+
+char HammerPowerUp::getDisplayChar() const {
+    return 'H';
+}
+
+
+================================================================================
+FILE: src/entities/LightningPowerUp.cpp
+================================================================================
+#include "../../include/entities/LightningPowerUp.h"
+#include "../../include/entities/Player.h"
+
+LightningPowerUp::LightningPowerUp(int x, int y) : PowerUp(x, y) {}
+
+void LightningPowerUp::apply(Player& player) {
+    player.increaseBombRadius();
+}
+
+char LightningPowerUp::getDisplayChar() const { return 'L'; } // L for Lightning Power-Up
+
+================================================================================
+FILE: src/entities/Player.cpp
+================================================================================
+#include "../../include/interfaces/IPushable.h"
+#include "../../include/entities/Player.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/Bomb.h"
+
+Player::Player(int startX, int startY, int id)
+    : Entity(startX, startY),
+      m_id(id),
+      m_bombRadius(INITIAL_BOMB_RADIUS),
+      m_maxBombs(INITIAL_MAX_BOMBS),
+      m_speedLevel(0),
+      m_cooldown(0),
+      m_lives(INITIAL_LIVES),
+      m_invincibilityTimer(0) {}
+
+int Player::getId() const { return m_id; }
+int Player::getLives() const { return m_lives; }
+int Player::getMaxBombs() const { return m_maxBombs; }
+int Player::getBombRadius() const { return m_bombRadius; }
+int Player::getSpeedLevel() const { return m_speedLevel; }
+int Player::getCooldown() const { return m_cooldown; }
+int Player::getMoveCooldownMax() const {
+    int cd = BASE_MOVE_COOLDOWN - m_speedLevel;
+    return cd < MIN_MOVE_COOLDOWN ? MIN_MOVE_COOLDOWN : cd;
+}
+int Player::getInvincibilityTimer() const { return m_invincibilityTimer; }
+int Player::getFacingDx() const { return m_facingDx; }
+int Player::getFacingDy() const { return m_facingDy; }
+bool Player::hasHammer() const { return m_hasHammer; }
+bool Player::hasRing() const { return m_hasRing; }
+
+bool Player::isBot() const { return false; }
+std::string Player::getDisplayName() const { return "P" + std::to_string(m_id); }
+
+bool Player::isOnCooldown() const { return m_cooldown > 0; }
+void Player::addCooldown(int frames) { if (frames > 0) m_cooldown += frames; }
+bool Player::canPlaceBomb(const World& world) const { return world.countBombsForOwner(m_id) < m_maxBombs; }
+
+EntityType Player::getType() const { return EntityType::PLAYER; }
+
+char Player::getDisplayChar() const {
+    if (m_invincibilityTimer > 0 && (m_invincibilityTimer % 4 < 2)) {
+        return ' ';
+    }
+    return 'P';
+}
+
+void Player::update(World& /*world*/) {
+    if (m_cooldown > 0) m_cooldown--;
+    if (m_invincibilityTimer > 0) m_invincibilityTimer--;
+}
+
+void Player::onExplosionHit(World& world) {
+    onExplosionHit(world, false);
+}
+
+void Player::onExplosionHit(World& /*world*/, bool bypassInvincibility) {
+    if (!bypassInvincibility && m_invincibilityTimer > 0) return;
+    if (m_lives > 0) {
+        m_lives--;
+    }
+    if (m_lives > 0) {
+        m_invincibilityTimer = INVINCIBILITY_FRAMES;
+    } else {
+        destroy();
+    }
+}
+
+void Player::tryPlaceOrPushBomb(World& world) {
+    int cx = getX();
+    int cy = getY();
+
+    // Standing on a bomb: do nothing (do not place duplicate bomb on the same tile)
+    for (auto* e : world.getEntitiesAt(cx, cy)) {
+        if (e->isAlive() && e->getType() == EntityType::BOMB) {
+            return;
+        }
+    }
+
+    if (canPlaceBomb(world)) {
+        world.addEntity(std::make_unique<Bomb>(cx, cy, DEFAULT_BOMB_TIMER, m_bombRadius, m_id));
+    }
+}
+
+void Player::tryMove(int targetX, int targetY, World& world) {
+    bool canMove = world.isTileFree(targetX, targetY);
+
+    if (!canMove && world.isPositionValid(targetX, targetY)) {
+        auto entities = world.getEntitiesAt(targetX, targetY);
+
+        if (m_hasHammer && (m_facingDx != 0 || m_facingDy != 0)) {
+            int destX = targetX + m_facingDx;
+            int destY = targetY + m_facingDy;
+            if (Bomb::canSlideTo(world, destX, destY)) {
+                for (auto* e : entities) {
+                    if (!e->isAlive()) continue;
+                    if (auto* pushable = dynamic_cast<IPushable*>(e)) {
+                        pushable->push(m_facingDx, m_facingDy, m_id);
+                        return;
+                    }
+                }
+            }
+        }
+
+        if (m_hasRing && world.getBoard().getCellType(targetX, targetY) == CellType::EMPTY) {
+            canMove = true;
+            for (auto* e : entities) {
+                if (e->isAlive() && e->isSolid() && e->getType() != EntityType::BOMB) {
+                    canMove = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (canMove) {
+        setX(targetX);
+        setY(targetY);
+        m_cooldown = getMoveCooldownMax();
+    }
+}
+
+void Player::handleCommand(Command command, World& world) {
+    if (!isAlive()) return;
+
+    if (command == Command::PLACE_BOMB) {
+        tryPlaceOrPushBomb(world);
+        return;
+    }
+
+    int newDx = 0;
+    int newDy = 0;
+    switch (command) {
+        case Command::UP:    newDx = 0;  newDy = -1; break;
+        case Command::DOWN:  newDx = 0;  newDy = 1;  break;
+        case Command::LEFT:  newDx = -1; newDy = 0;  break;
+        case Command::RIGHT: newDx = 1;  newDy = 0;  break;
+        default: return;
+    }
+
+    int cx = getX();
+    int cy = getY();
+    int targetX = cx + newDx;
+    int targetY = cy + newDy;
+
+    if (isOnCooldown()) {
+        return;
+    }
+
+    m_facingDx = newDx;
+    m_facingDy = newDy;
+
+    tryMove(targetX, targetY, world);
+}
+
+void Player::increaseBombRadius() { m_bombRadius++; }
+void Player::increaseMaxBombs() { m_maxBombs++; }
+void Player::increaseSpeed() { if (m_speedLevel < MAX_SPEED_LEVEL) m_speedLevel++; }
+void Player::enableHammer() { m_hasHammer = true; }
+void Player::enableRing() { m_hasRing = true; }
+
+
+================================================================================
+FILE: src/entities/PowerUp.cpp
+================================================================================
+#include "../../include/entities/PowerUp.h"
+#include "../../include/entities/Player.h"
+#include "../../include/core/World.h"
+
+PowerUp::PowerUp(int x, int y) : Entity(x, y) {}
+
+EntityType PowerUp::getType() const {
+    return EntityType::POWER_UP;
+}
+
+void PowerUp::update(World& /*world*/) {
+}
+
+bool PowerUp::isSolid() const {
+    return false;
+}
+
+bool PowerUp::stopsExplosion() const {
+    return false;
+}
+
+void PowerUp::onExplosionHit(World& /*world*/) {
+    return;
+}
+
+void PowerUp::onIntersect(Entity& other, World& /*world*/) {
+    if (!isAlive() || !other.isAlive()) return;
+
+    if (other.getType() == EntityType::PLAYER) {
+        apply(static_cast<Player&>(other));
+        destroy();
+    }
+}
+
+
+================================================================================
+FILE: src/entities/RingPowerUp.cpp
+================================================================================
+#include "../../include/entities/RingPowerUp.h"
+#include "../../include/entities/Player.h"
+
+RingPowerUp::RingPowerUp(int x, int y) : PowerUp(x, y) {}
+
+char RingPowerUp::getDisplayChar() const {
+    return 'R';
+}
+
+void RingPowerUp::apply(Player& player) {
+    player.enableRing();
+}
+
+================================================================================
+FILE: src/entities/SpeedPowerUp.cpp
+================================================================================
+#include "../../include/entities/SpeedPowerUp.h"
+#include "../../include/entities/Player.h"
+
+SpeedPowerUp::SpeedPowerUp(int x, int y) : PowerUp(x, y) {}
+
+void SpeedPowerUp::apply(Player& player) {
+    player.increaseSpeed();
+}
+
+char SpeedPowerUp::getDisplayChar() const {
+    return 'S';
+}
+
+================================================================================
+FILE: src/factories/PowerUpFactory.cpp
+================================================================================
+#include "../../include/factories/PowerUpFactory.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/LightningPowerUp.h"
+#include "../../include/entities/SpeedPowerUp.h"
+#include "../../include/entities/BombPowerUp.h"
+#include "../../include/entities/HammerPowerUp.h"
+#include "../../include/entities/RingPowerUp.h"
+#include <cstdlib>
+#include <memory>
+
+void PowerUpFactory::trySpawn(World& world, int x, int y) {
+    int r = rand() % 100;
+    if (r < 15) {
+        world.addEntity(std::make_unique<LightningPowerUp>(x, y));
+    } else if (r < 30) {
+        world.addEntity(std::make_unique<SpeedPowerUp>(x, y));
+    } else if (r < 45) {
+        world.addEntity(std::make_unique<BombPowerUp>(x, y));
+    } else if (r < 60) {
+        world.addEntity(std::make_unique<HammerPowerUp>(x, y));
+    } else if (r < 75) {
+        world.addEntity(std::make_unique<RingPowerUp>(x, y));
+    }
+}
+
+
+================================================================================
+FILE: src/levels/ClassicLevel.cpp
+================================================================================
+#include "../../include/levels/ClassicLevel.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/BreakableWall.h"
+#include <cstdlib>
+#include <algorithm>
+
+ClassicLevel::ClassicLevel(int numPlayers, int boardWidth, int boardHeight, int wallDensityPercent)
+    : m_numPlayers(numPlayers), m_wallDensityPercent(std::clamp(wallDensityPercent, 10, 85)) {
+    if (numPlayers >= 1) m_spawnPoints.push_back({0, 0});
+    if (numPlayers >= 2) m_spawnPoints.push_back({boardWidth - 1, boardHeight - 1});
+    if (numPlayers >= 3) m_spawnPoints.push_back({0, boardHeight - 1});
+    if (numPlayers >= 4) m_spawnPoints.push_back({boardWidth - 1, 0});
+}
+
+std::vector<Position> ClassicLevel::getSpawnPoints() const {
+    return m_spawnPoints;
+}
+
+bool ClassicLevel::isSafeZone(int x, int y) const {
+    for (const auto& spawnPoint : m_spawnPoints) {
+        int manhattanDistance = std::abs(spawnPoint.x - x) + std::abs(spawnPoint.y - y);
+        if (manhattanDistance <= 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ClassicLevel::generate(World& world) {
+    Board& board = world.getBoard();
+    int width = board.getWidth();
+    int height = board.getHeight();
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if ((x % 2) != 0 && (y % 2) != 0) {
+                board.setCellType(x, y, CellType::SOLID_WALL);
+            }
+        }
+    }
+
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (board.getCellType(x, y) == CellType::SOLID_WALL) {
+                continue;
+            }
+            if (std::rand() % 100 < m_wallDensityPercent) {
+                if (!isSafeZone(x, y)) {
+                    board.setCellType(x, y, CellType::BREAKABLE_WALL);
+                }
+            }
+        }
+    }
+    world.sync();
+}
+
+
+================================================================================
+FILE: src/main.cpp
+================================================================================
+#include <iostream>
+#include <ctime>
+#include <cstdlib>
+#include <thread>
+#include <chrono>
+#include <limits>
+#include <algorithm>
+
+#include "../include/core/Game.h"
+#include "../include/levels/ClassicLevel.h"
+#include "../include/entities/Player.h"
+#include "../include/core/ConsoleRenderer.h"
+#include "../include/core/ConsoleInput.h"
+
+namespace {
+    constexpr int BOARD_WIDTH = 13;
+    constexpr int BOARD_HEIGHT = 13;
+    constexpr int MAX_TOTAL_PARTICIPANTS = 4;
+    constexpr int MAX_HUMAN_PLAYERS = 2;
+    constexpr int TARGET_FPS = 30;
+    constexpr int FRAME_DURATION_MS = 1000 / TARGET_FPS;
+}
+
+struct GameConfig {
+    int numPlayers = 1;
+    int numBots = 1;
+};
+
+int readBoundedInt(const char* prompt, int minVal, int maxVal) {
+    int value = minVal;
+    std::cout << prompt;
+    if (!(std::cin >> value)) {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        value = minVal;
+    }
+    return std::clamp(value, minVal, maxVal);
+}
+
+GameConfig showMenu() {
+    GameConfig config;
+    std::cout << "\033[2J\033[1;1H";
+    std::cout << "=================================\n";
+    std::cout << "         BOMBERMAN CLONE         \n";
+    std::cout << "=================================\n\n";
+
+    config.numPlayers = readBoundedInt("Enter number of human players (0 - 2): ", 0, MAX_HUMAN_PLAYERS);
+
+    int maxBots = MAX_TOTAL_PARTICIPANTS - config.numPlayers;
+    int minBots = (config.numPlayers == 0) ? 2 : 0;
+    std::string botPrompt = "Enter number of bots (" + std::to_string(minBots) + " - " + std::to_string(maxBots) + "): ";
+    config.numBots = readBoundedInt(botPrompt.c_str(), minBots, maxBots);
+
+    return config;
+}
+
+int main() {
+    srand(static_cast<unsigned int>(time(nullptr)));
+
+    GameConfig config = showMenu();
+    int totalParticipants = std::max(1, config.numPlayers + config.numBots);
+
+    Game game(BOARD_WIDTH, BOARD_HEIGHT);
+    ConsoleRenderer renderer;
+    ConsoleInput consoleInput;
+
+    ClassicLevel level(totalParticipants, BOARD_WIDTH, BOARD_HEIGHT);
+    game.loadLevel(level, config.numPlayers, config.numBots);
+
+    bool isRunning = true;
+
+    while (isRunning) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+
+        auto commands = consoleInput.pollCommands();
+        for (const auto& pc : commands) {
+            if (pc.command == Command::QUIT) {
+                isRunning = false;
+                break;
+            }
+        }
+        if (!isRunning) {
+            break;
+        }
+
+        game.update(commands);
+        
+        // Pass Sudden Death timer and active status to the console renderer
+        renderer.render(game.getWorld(), game.getSuddenDeathTimer(), game.isSuddenDeathActive());
+
+        if (game.isGameOver()) {
+            break;
+        }
+
+        auto frameEnd = std::chrono::high_resolution_clock::now();
+        auto frameDuration = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart).count();
+
+        int sleepTime = FRAME_DURATION_MS - static_cast<int>(frameDuration);
+        if (sleepTime > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+        }
+    }
+
+    int winnerId = game.getWinnerId();
+    std::cout << "\n============================================\n";
+    if (winnerId == -1) {
+        std::cout << "               IT'S A DRAW!                 \n";
+    } else {
+        const Player* winner = game.getWorld().getPlayer(winnerId);
+        if (winner && winner->isBot()) {
+            std::cout << "               BOT " << winnerId << " WINS!                 \n";
+        } else {
+            std::cout << "             PLAYER " << winnerId << " WINS!                \n";
+        }
+    }
+    std::cout << "============================================\n";
+
+    return 0;
+}
+
+
+================================================================================
+FILE: src/systems/CollisionSystem.cpp
+================================================================================
+#include "../../include/systems/CollisionSystem.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/Entity.h"
+
+void CollisionSystem::process(World& world) {
+    const auto& entities = world.getEntities();
+    
+    for (size_t i = 0; i < entities.size(); ++i) {
+        if (!entities[i]->isAlive()) continue;
+        
+        for (size_t j = i + 1; j < entities.size(); ++j) {
+            if (!entities[j]->isAlive()) continue;
+            
+            if (entities[i]->getX() == entities[j]->getX() && 
+                entities[i]->getY() == entities[j]->getY()) {
+                
+                entities[i]->onIntersect(*entities[j], world);
+                entities[j]->onIntersect(*entities[i], world);
+            }
+        }
+    }
+}
+
+================================================================================
+FILE: src/systems/ExplosionSystem.cpp
+================================================================================
+#include "../../include/systems/ExplosionSystem.h"
+#include "../../include/core/World.h"
+#include "../../include/entities/Flame.h"
+#include "../../include/entities/Bomb.h"
+#include "../../include/entities/Player.h"
+#include "../../include/factories/PowerUpFactory.h"
+
+void ExplosionSystem::process(World& world) {
+    bool hasExplodingBombs = true;
+    int maxIterations = static_cast<int>(world.getEntities().size()) + 16;
+
+    while (hasExplodingBombs && maxIterations-- > 0) {
+        hasExplodingBombs = false;
+
+        const auto& entities = world.getEntities();
+        Bomb* bombToExplode = nullptr;
+
+        for (const auto& entity : entities) {
+            if (entity->isAlive() && entity->shouldExplode() && entity->getType() == EntityType::BOMB) {
+                bombToExplode = static_cast<Bomb*>(entity.get());
+                break;
+            }
+        }
+
+        if (bombToExplode) {
+            hasExplodingBombs = true;
+
+            int bx = bombToExplode->getX();
+            int by = bombToExplode->getY();
+            int radius = bombToExplode->getRadius();
+            int creditOwnerId = bombToExplode->getCreditOwnerId();
+
+            bombToExplode->destroy();
+
+            explodeTile(world, bx, by, creditOwnerId);
+
+            explodeInDirection(world, bx, by, 1, 0, radius, creditOwnerId);
+            explodeInDirection(world, bx, by, -1, 0, radius, creditOwnerId);
+            explodeInDirection(world, bx, by, 0, 1, radius, creditOwnerId);
+            explodeInDirection(world, bx, by, 0, -1, radius, creditOwnerId);
+
+            world.sync();
+        }
+    }
+}
+
+bool ExplosionSystem::explodeTile(World& world, int targetX, int targetY, int ownerId) {
+    if (!world.isPositionValid(targetX, targetY)) {
+        return false;
+    }
+
+    CellType cellType = world.getBoard().getCellType(targetX, targetY);
+    if (cellType == CellType::SOLID_WALL) {
+        return false;
+    }
+
+    bool explosionStopped = false;
+    if (cellType == CellType::BREAKABLE_WALL) {
+        world.getBoard().setCellType(targetX, targetY, CellType::EMPTY);
+        if (ownerId > 0) {
+            world.recordWallDestroyed(ownerId);
+        }
+        PowerUpFactory::trySpawn(world, targetX, targetY);
+        explosionStopped = true;
+    }
+
+    auto entitiesHere = world.getEntitiesAt(targetX, targetY);
+
+    for (auto* entity : entitiesHere) {
+        if (entity->isAlive()) {
+            EntityType type = entity->getType();
+            bool isPlayer = (type == EntityType::PLAYER);
+            int victimId = isPlayer ? static_cast<Player*>(entity)->getId() : -1;
+            int livesBefore = isPlayer ? static_cast<Player*>(entity)->getLives() : 0;
+            bool blocksBlast = entity->stopsExplosion();
+
+            if (type == EntityType::BOMB && ownerId > 0) {
+                // Propagate credit owner in chain reactions
+                static_cast<Bomb*>(entity)->push(0, 0, ownerId);
+            }
+
+            entity->onExplosionHit(world);
+
+            if (isPlayer && ownerId > 0 && ownerId != victimId) {
+                int livesAfter = entity->isAlive() ? static_cast<Player*>(entity)->getLives() : 0;
+                if (livesAfter < livesBefore) {
+                    world.recordEnemyHit(ownerId);
+                }
+                if (!entity->isAlive()) {
+                    world.recordEnemyKilled(ownerId);
+                }
+            }
+
+            if (blocksBlast) {
+                explosionStopped = true;
+            }
+        }
+    }
+
+    world.addEntity(std::make_unique<Flame>(targetX, targetY, 30, ownerId));
+
+    return !explosionStopped;
+}
+
+void ExplosionSystem::explodeInDirection(World& world, int startX, int startY, int dx, int dy, int radius, int ownerId) {
+    for (int i = 1; i <= radius; i++) {
+        if (!explodeTile(world, startX + i * dx, startY + i * dy, ownerId)) {
+            break;
+        }
+    }
+}
+
+
+================================================================================
+FILE: src/systems/SuddenDeathSystem.cpp
+================================================================================
+#include "../../include/systems/SuddenDeathSystem.h"
+#include "../../include/core/World.h"
+#include "../../include/core/Board.h"
+#include "../../include/entities/Entity.h"
+#include "../../include/entities/Player.h"
+
+SuddenDeathSystem::SuddenDeathSystem(int startDelayTicks, int boardWidth, int boardHeight)
+    : m_ticksUntilStart(startDelayTicks),
+      m_dropCooldown(15), // 15 frames at 30 FPS = 2 tiles per second
+      m_currentCooldown(0),
+      m_minX(0), m_maxX(boardWidth - 1),
+      m_minY(0), m_maxY(boardHeight - 1),
+      m_x(0), m_y(0),
+      m_dx(1), m_dy(0),
+      m_isFinished(false) {}
+
+int SuddenDeathSystem::getTicksRemaining() const { 
+    return m_ticksUntilStart; 
+}
+
+void SuddenDeathSystem::setTicksRemaining(int ticks) {
+    m_ticksUntilStart = ticks;
+}
+
+bool SuddenDeathSystem::isActive() const { 
+    return m_ticksUntilStart <= 0 && !m_isFinished; 
+}
+
+std::vector<SuddenDeathDangerTile> SuddenDeathSystem::getImminentDangerTiles(int lookaheadTicks) const {
+    std::vector<SuddenDeathDangerTile> result;
+    if (m_isFinished || m_ticksUntilStart > lookaheadTicks) {
+        return result;
+    }
+
+    int ticksUntilNext = (m_ticksUntilStart > 0 ? m_ticksUntilStart : 0) + m_currentCooldown;
+    int minX = m_minX, maxX = m_maxX;
+    int minY = m_minY, maxY = m_maxY;
+    int x = m_x, y = m_y;
+    int dx = m_dx, dy = m_dy;
+    bool finished = m_isFinished;
+
+    while (!finished && ticksUntilNext <= lookaheadTicks) {
+        result.push_back({x, y, ticksUntilNext});
+
+        if (dx == 1 && x == maxX) {
+            dx = 0; dy = 1; minY++;
+        } else if (dx == 0 && dy == 1 && y == maxY) {
+            dx = -1; dy = 0; maxX--;
+        } else if (dx == -1 && x == minX) {
+            dx = 0; dy = -1; maxY--;
+        } else if (dx == 0 && dy == -1 && y == minY) {
+            dx = 1; dy = 0; minX++;
+        }
+
+        x += dx;
+        y += dy;
+
+        if (minX > maxX || minY > maxY || (maxX - minX <= 4 && maxY - minY <= 4)) {
+            finished = true;
+        } else {
+            ticksUntilNext += m_dropCooldown + 1;
+        }
+    }
+    return result;
+}
+
+void SuddenDeathSystem::process(World& world) {
+    if (m_isFinished) return;
+
+    if (m_ticksUntilStart > 0) {
+        m_ticksUntilStart--;
+        return;
+    }
+
+    if (m_currentCooldown > 0) {
+        m_currentCooldown--;
+        return;
+    }
+
+    world.getBoard().setCellType(m_x, m_y, CellType::SOLID_WALL);
+
+    auto crushEntities = [&](const std::vector<std::unique_ptr<Entity>>& list) {
+        for (const auto& e : list) {
+            if (e->isAlive() && e->getX() == m_x && e->getY() == m_y) {
+                if (e->getType() == EntityType::PLAYER) {
+                    auto* p = static_cast<Player*>(e.get());
+                    int maxHits = p->getLives() + 1;
+                    while (p->isAlive() && maxHits-- > 0) {
+                        p->onExplosionHit(world, true);
+                    }
+                    if (p->isAlive()) {
+                        p->destroy();
+                    }
+                } else {
+                    e->destroy();
+                }
+            }
+        }
+    };
+    crushEntities(world.getEntities());
+    crushEntities(world.getSpawnQueue());
+
+    if (m_dx == 1 && m_x == m_maxX) {
+        m_dx = 0; m_dy = 1; m_minY++;
+    } else if (m_dx == 0 && m_dy == 1 && m_y == m_maxY) {
+        m_dx = -1; m_dy = 0; m_maxX--;
+    } else if (m_dx == -1 && m_x == m_minX) {
+        m_dx = 0; m_dy = -1; m_maxY--;
+    } else if (m_dx == 0 && m_dy == -1 && m_y == m_minY) {
+        m_dx = 1; m_dy = 0; m_minX++;
+    }
+
+    m_x += m_dx;
+    m_y += m_dy;
+
+    if (m_minX > m_maxX || m_minY > m_maxY || (m_maxX - m_minX <= 4 && m_maxY - m_minY <= 4)) {
+        m_isFinished = true;
+    } else {
+        m_currentCooldown = m_dropCooldown;
+    }
+}
+
+

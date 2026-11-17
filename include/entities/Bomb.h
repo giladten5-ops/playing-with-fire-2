@@ -5,6 +5,9 @@
 class World;
 
 class Bomb : public Entity, public IPushable {
+public:
+    static constexpr int SLIDE_COOLDOWN_FRAMES = 3;
+
 private:
     int m_timer;
     int m_radius;
@@ -25,6 +28,7 @@ public:
     bool isSliding() const;
     int getSlideDx() const;
     int getSlideDy() const;
+    int getSlideCooldown() const;
 
     static bool canSlideTo(const World& world, int x, int y);
 

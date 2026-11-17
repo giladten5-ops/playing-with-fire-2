@@ -5,7 +5,7 @@ class Flame : public Entity {
 private:
     int m_timer;
     int m_ownerId;
-    bool m_activeForCollision = false;
+    bool m_activeForCollision = true;
 
 public:
     Flame(int x, int y, int timer, int ownerId = -1);

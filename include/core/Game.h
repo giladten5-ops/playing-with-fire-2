@@ -12,6 +12,7 @@ struct StepResult {
     bool isDone = false;
     float reward = 0.0f;
     int wallsDestroyed = 0;
+    int enemiesHit = 0;
     int enemiesKilled = 0;
     int powerUpsCollected = 0;
     int livesLost = 0;
@@ -32,6 +33,7 @@ struct PlayerInfo {
     int bombRadius = 2;
     int speedLevel = 0;
     int cooldown = 0;
+    int moveCooldownMax = 4;
     int invincibilityTimer = 0;
     int facingDx = 0;
     int facingDy = 1;
@@ -51,6 +53,21 @@ struct BombInfo {
     bool isSliding = false;
     int slideDx = 0;
     int slideDy = 0;
+    int slideCooldown = 0;
+    int slideCooldownMax = 2;
+};
+
+struct PowerUpInfo {
+    int x = 0;
+    int y = 0;
+    char type = ' ';
+};
+
+struct FlameInfo {
+    int x = 0;
+    int y = 0;
+    int timer = 0;
+    int ownerId = -1;
 };
 
 class Game {
@@ -67,11 +84,15 @@ public:
 
     void loadLevel(ILevel& level, int numHumanPlayers = 0, int numBots = 0, bool shuffleSpawns = true);
     void reset(ILevel& level, int numHumanPlayers = 0, int numBots = 0);
-    StepResult step(int playerId, Command action);
+    StepResult step(int playerId, Command action, const std::vector<PlayerCommand>& extraCommands = {});
+    void fillState(int playerId, float* state) const;
     std::vector<float> getState(int playerId) const;
+    std::vector<std::vector<int>> getBoardGrid() const;
 
     PlayerInfo getPlayerInfo(int playerId) const;
     std::vector<BombInfo> getBombs() const;
+    std::vector<PowerUpInfo> getPowerUps() const;
+    std::vector<FlameInfo> getFlames() const;
 
     // Deterministic setup helpers for unit testing & custom scenarios
     void clearBoard();
@@ -89,5 +110,6 @@ public:
     int getWinnerId() const;
 
     int getSuddenDeathTimer() const;
+    void setSuddenDeathTimer(int ticks);
     bool isSuddenDeathActive() const;
 };

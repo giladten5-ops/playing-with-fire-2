@@ -5,6 +5,6 @@ class World;
 class IRenderer {
     public:
         virtual ~IRenderer() = default;
-        // עדכנו את הממשק כדי שיוכל לקבל נתונים על מצב ה-Sudden Death
+        // Render world state along with Sudden Death timer and active status
         virtual void render(const World& world, int sdTimerTicks = -1, bool sdActive = false) = 0;
 };
