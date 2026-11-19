@@ -259,7 +259,7 @@ class PPOAgentController:
     DIRS: Dict[int, Tuple[int, int]] = DIRS
 
     _shared_model: Optional[object] = None
-    _shared_expected_channels: int = 12
+    _shared_expected_channels: int = 19
     _model_load_attempted: bool = False
 
     def __init__(
@@ -270,7 +270,7 @@ class PPOAgentController:
         tactical_shield: bool = True,
         frame_skip: int = 6,
         shared_model: Optional[object] = None,
-        expected_channels: int = 12,
+        expected_channels: int = 19,
         lazy: bool = False,
         model_path: Optional[str] = None,
         temperature: float = 0.2,
@@ -303,7 +303,7 @@ class PPOAgentController:
     def reset_model_cache(cls) -> None:
         """Resets class-level model cache (for testing or explicit reload)."""
         cls._shared_model = None
-        cls._shared_expected_channels = 12
+        cls._shared_expected_channels = 19
         cls._model_load_attempted = False
 
     @staticmethod

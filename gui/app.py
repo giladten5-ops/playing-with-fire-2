@@ -36,7 +36,7 @@ class BombermanGUIApp:
     """
 
     WINDOW_CAPTION: str = "Playing with Fire 2 — Bomberman GUI"
-    MAX_FRAME_DELTA: float = 0.1
+    MAX_FRAME_DELTA: float = 0.125
     MAX_TICKS_PER_FRAME: int = 3
     MAX_TOTAL_PLAYERS: int = 4
     MAX_HUMAN_PLAYERS: int = 2

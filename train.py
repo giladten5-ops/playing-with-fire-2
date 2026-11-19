@@ -50,7 +50,7 @@ from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 
 import bomberman_engine as bme
-from bomberman_env import BombermanCNN, BombermanEnv
+from bomberman_env import BombermanCNN, BombermanEnv, _get_shared_opponent_model
 
 # Cap PyTorch CPU threads so training never starves the WSL host or VS Code / Antigravity IDE server
 th.set_num_threads(2)
@@ -319,11 +319,18 @@ def main() -> None:
             if os.path.exists(default_gm):
                 candidate_sp = default_gm
         if candidate_sp and os.path.exists(candidate_sp):
-            # Copy frozen snapshot into run_dir so Self-Play opponent stays stable even if source is overwritten
-            frozen_sp_path = os.path.join(run_dir, "frozen_opponent.zip")
-            shutil.copy2(candidate_sp, frozen_sp_path)
-            sp_model_path = frozen_sp_path
-            print(f"🤖 League Self-Play Enabled — Opponent Snapshot: {candidate_sp}", flush=True)
+            loaded_sp, _ = _get_shared_opponent_model(candidate_sp, 13, 15)
+            if loaded_sp is not None:
+                # Copy frozen snapshot into run_dir so Self-Play opponent stays stable even if source is overwritten
+                frozen_sp_path = os.path.join(run_dir, "frozen_opponent.zip")
+                shutil.copy2(candidate_sp, frozen_sp_path)
+                sp_model_path = frozen_sp_path
+                print(f"🤖 League Self-Play Enabled — Opponent Snapshot: {candidate_sp}", flush=True)
+            else:
+                print(
+                    f"ℹ️ Skipping incompatible Self-Play checkpoint ({candidate_sp} is not 15x13); using BFS/DumbBot opponents for this run.",
+                    flush=True,
+                )
 
     seed_everything(args.seed)
     gc.collect()

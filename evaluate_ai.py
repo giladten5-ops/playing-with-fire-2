@@ -127,7 +127,7 @@ def evaluate_scenario(
         if scenario.get("grant_powerups"):
             env._cached_analysis = None
             base_obs = np.asarray(env.game.getState(env.player_id), dtype=np.float32).reshape(
-                10, env.height, env.width
+                -1, env.height, env.width
             )
             reach_map, bomb_map, potential, analysis = env._compute_bfs_features(base_obs)
             obs = env._format_obs(base_obs, reach_map, bomb_map)

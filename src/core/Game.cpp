@@ -232,9 +232,16 @@ void Game::fillState(int playerId, float* state) const {
         int activeB = m_world.countBombsForOwner(playerId);
         float availB = std::max(0, maxB - activeB) / 10.0f;
         float specialVal = (selfPlayer->hasHammer() ? 0.6f : 0.0f) + (selfPlayer->hasRing() ? 0.4f : 0.0f);
+        float radiusNorm = std::clamp(static_cast<float>(selfPlayer->getBombRadius()) / 10.0f, 0.0f, 1.0f);
+        float speedNorm = std::clamp(
+            static_cast<float>(selfPlayer->getSpeedLevel()) / static_cast<float>(Player::MAX_SPEED_LEVEL),
+            0.0f, 1.0f
+        );
         for (int i = 0; i < width * height; ++i) {
             state[8 * width * height + i] = availB;
             state[9 * width * height + i] = specialVal;
+            state[15 * width * height + i] = radiusNorm;
+            state[16 * width * height + i] = speedNorm;
         }
     }
 
@@ -245,7 +252,17 @@ void Game::fillState(int playerId, float* state) const {
         EntityType type = entity->getType();
 
         if (type == EntityType::FLAME) { setPixel(4, ex, ey, 1.0f); setPixel(3, ex, ey, 1.0f); }
-        else if (type == EntityType::POWER_UP) setPixel(5, ex, ey, 1.0f);
+        else if (type == EntityType::POWER_UP) {
+            setPixel(5, ex, ey, 1.0f);
+            switch (entity->getDisplayChar()) {
+                case 'L': setPixel(10, ex, ey, 1.0f); break;
+                case 'S': setPixel(11, ex, ey, 1.0f); break;
+                case '+': setPixel(12, ex, ey, 1.0f); break;
+                case 'H': setPixel(13, ex, ey, 1.0f); break;
+                case 'R': setPixel(14, ex, ey, 1.0f); break;
+                default: break;
+            }
+        }
         else if (type == EntityType::PLAYER) {
             const Player* player = static_cast<const Player*>(entity.get());
             if (player->getId() == playerId) {
@@ -361,7 +378,7 @@ std::vector<float> Game::getState(int playerId) const {
     const Board& board = m_world.getBoard();
     int width = board.getWidth();
     int height = board.getHeight();
-    int channels = 10;
+    int channels = 17;
 
     std::vector<float> state(channels * width * height, 0.0f);
     fillState(playerId, state.data());

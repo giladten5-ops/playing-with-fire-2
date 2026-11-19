@@ -21,13 +21,18 @@ from rl_utils import (
 _SHARED_OPPONENT_MODELS: Dict[str, Tuple[float, Any, int]] = {}
 
 
-def _get_shared_opponent_model(model_path: Optional[str]) -> Tuple[Optional[Any], int]:
+def _get_shared_opponent_model(
+    model_path: Optional[str],
+    expected_height: int = 13,
+    expected_width: int = 15,
+) -> Tuple[Optional[Any], int]:
     """Loads and caches a frozen PPO or MaskablePPO checkpoint once per process, reloading only if file mtime changes."""
     if not model_path or not os.path.exists(model_path):
-        return None, 12
+        return None, 19
     try:
         mtime = os.path.getmtime(model_path)
-        cached = _SHARED_OPPONENT_MODELS.get(model_path)
+        cache_key = f"{model_path}:{expected_height}x{expected_width}"
+        cached = _SHARED_OPPONENT_MODELS.get(cache_key)
         if cached is not None and cached[0] == mtime:
             return cached[1], cached[2]
         try:
@@ -44,12 +49,16 @@ def _get_shared_opponent_model(model_path: Optional[str]) -> Tuple[Optional[Any]
                 custom_objects={"BombermanCNN": BombermanCNN},
             )
         model.policy.set_training_mode(False)
-        obs_shape = getattr(model.observation_space, "shape", (12, 13, 13))
-        expected_channels = int(obs_shape[0]) if obs_shape else 12
-        _SHARED_OPPONENT_MODELS[model_path] = (mtime, model, expected_channels)
+        obs_shape = getattr(model.observation_space, "shape", (19, 13, 15))
+        if obs_shape and len(obs_shape) == 3:
+            if int(obs_shape[1]) != int(expected_height) or int(obs_shape[2]) != int(expected_width):
+                _SHARED_OPPONENT_MODELS[cache_key] = (mtime, None, 19)
+                return None, 19
+        expected_channels = int(obs_shape[0]) if obs_shape else 19
+        _SHARED_OPPONENT_MODELS[cache_key] = (mtime, model, expected_channels)
         return model, expected_channels
     except Exception:
-        return None, 12
+        return None, 19
 
 
 class BombermanCNN(BaseFeaturesExtractor):
@@ -76,7 +85,7 @@ class BombermanEnv(gym.Env):
 
     def __init__(
         self,
-        board_width=13,
+        board_width=15,
         board_height=13,
         max_steps=900,
         frame_skip=6,
@@ -106,7 +115,7 @@ class BombermanEnv(gym.Env):
 
         self.game = bme.Game(self.width, self.height)
         self.action_space = spaces.Discrete(6)
-        self.n_channels = 10 if self.use_10_channels else 12
+        self.n_channels = 10 if self.use_10_channels else 19
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(self.n_channels, self.height, self.width), dtype=np.float32
         )
@@ -142,14 +151,16 @@ class BombermanEnv(gym.Env):
         """Computes frozen Self-Play PPO + Tactical Shield commands for active AI opponent slots."""
         if not self._active_ai_opponent_ids:
             return []
-        opp_model, opp_channels = _get_shared_opponent_model(self.self_play_model_path)
+        opp_model, opp_channels = _get_shared_opponent_model(
+            self.self_play_model_path, self.height, self.width
+        )
         cmds: List[bme.PlayerCommand] = []
         for opp_id in self._active_ai_opponent_ids:
             opp_info = self.game.getPlayerInfo(opp_id)
             if not opp_info.isAlive:
                 continue
             opp_base = np.asarray(self.game.getState(opp_id), dtype=np.float32).reshape(
-                10, self.height, self.width
+                -1, self.height, self.width
             )
             opp_reach, opp_bomb, _, opp_analysis = compute_bfs_features(
                 opp_base, opp_info, self.width, self.height
@@ -181,7 +192,7 @@ class BombermanEnv(gym.Env):
 
         if self._cached_analysis is None:
             base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
-                10, self.height, self.width
+                -1, self.height, self.width
             )
             _, _, prev_potential, analysis = self._compute_bfs_features(base_obs)
         else:
@@ -244,7 +255,7 @@ class BombermanEnv(gym.Env):
         self.ep_stats["ticks"] += ticks_executed
 
         new_base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
-            10, self.height, self.width
+            -1, self.height, self.width
         )
         reach_map, bomb_map, new_potential, post_analysis = self._compute_bfs_features(new_base_obs)
         obs = self._format_obs(new_base_obs, reach_map, bomb_map)
@@ -268,10 +279,10 @@ class BombermanEnv(gym.Env):
                 enemy_t = int(analysis.get("enemy_targets_here", 0))
                 compressed_t = int(analysis.get("enemy_space_compressed_here", 0))
                 trap_here = bool(analysis.get("trap_bomb_here", False))
-                total_reward += 0.35 + (1.0 * enemy_t) + (0.25 * min(compressed_t, 6))
+                total_reward += 0.35 + (1.6 * enemy_t) + (0.40 * min(compressed_t, 6))
                 if trap_here:
                     self.ep_stats["traps_created"] += 1
-                    total_reward += 2.50
+                    total_reward += 3.50
             else:
                 total_reward -= 0.45
         if bomb_pushed_any:
@@ -289,10 +300,10 @@ class BombermanEnv(gym.Env):
                 or push_compressed > 0
                 or newly_trapped
             ):
-                total_reward += 0.8 + (0.25 * min(push_compressed, 6))
+                total_reward += 1.2 + (0.40 * min(push_compressed, 6))
                 if newly_trapped:
                     self.ep_stats["traps_created"] += 1
-                    total_reward += 2.50
+                    total_reward += 3.50
             else:
                 total_reward -= 0.1
         if analysis["in_danger"] and not post_analysis["in_danger"] and not died:
@@ -384,7 +395,7 @@ class BombermanEnv(gym.Env):
                     self.game.givePlayerPowerUp(self.player_id, "H")
 
         base_obs = np.asarray(self.game.getState(self.player_id), dtype=np.float32).reshape(
-            10, self.height, self.width
+            -1, self.height, self.width
         )
         reach_map, bomb_map, potential, analysis = self._compute_bfs_features(base_obs)
         if analysis.get("pos"):

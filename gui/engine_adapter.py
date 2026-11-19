@@ -349,7 +349,7 @@ class CppGameSession(IGameSession):
         if player_id not in self._obs_cache:
             raw_state = self._game.getState(player_id)
             self._obs_cache[player_id] = np.asarray(raw_state, dtype=np.float32).reshape(
-                10, self.height, self.width
+                -1, self.height, self.width
             )
         return self._obs_cache[player_id]
 
@@ -365,6 +365,7 @@ class CppGameSession(IGameSession):
                 "has_ring": int(pinfo.hasRing),
                 "has_hammer": int(pinfo.hasHammer),
                 "bomb_radius": int(pinfo.bombRadius),
+                "speed_level": int(getattr(pinfo, "speedLevel", 0)),
                 "avail_bombs": int(pinfo.availBombs),
                 "facing_dx": int(pinfo.facingDx),
                 "facing_dy": int(pinfo.facingDy),

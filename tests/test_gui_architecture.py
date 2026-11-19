@@ -641,7 +641,7 @@ class TestGUIArchitecture(unittest.TestCase):
 
         pinfo = game.getPlayerInfo(1)
         self.assertTrue(pinfo.hasHammer and pinfo.hasRing)
-        base_obs = np.asarray(game.getState(1), dtype=np.float32).reshape(10, 13, 13)
+        base_obs = np.asarray(game.getState(1), dtype=np.float32).reshape(-1, 13, 13)
         _, _, _, analysis = compute_bfs_features(base_obs, pinfo, 13, 13)
         self.assertIn(4, analysis["push_actions"], "Action 4 (RIGHT) must be recognized as a valid Hammer push action")
         self.assertIn(4, analysis["valid_moves"], "Action 4 (RIGHT) must be included in valid_moves for Hammer push")
@@ -661,13 +661,13 @@ class TestGUIArchitecture(unittest.TestCase):
         self.assertEqual((p_after.x, p_after.y), (2, 2), "Player must push bomb from (2,2), not step onto (3,2) via Ring")
 
         # 2. Sliding bomb trajectory danger projection in Channel 3 (danger)
-        state_sliding = np.asarray(game.getState(1), dtype=np.float32).reshape(10, 13, 13)
+        state_sliding = np.asarray(game.getState(1), dtype=np.float32).reshape(-1, 13, 13)
         self.assertGreater(state_sliding[3, 2, 6], 0.0, "Sliding bomb trajectory tiles must be marked in Channel 3 (danger)")
         self.assertEqual(state_sliding[2, 2, 8], 0.0, "Empty sliding trajectory tiles must NOT be marked as solid bombs in Channel 2")
 
         # 3. Imminent Sudden Death spiral danger projection in Channel 3 (danger) and BFS recognition
         game.setSuddenDeathTimer(10)
-        state_sd = np.asarray(game.getState(1), dtype=np.float32).reshape(10, 13, 13)
+        state_sd = np.asarray(game.getState(1), dtype=np.float32).reshape(-1, 13, 13)
         self.assertGreater(state_sd[3, 0, 0], 0.5, "Imminent Sudden Death spiral tile (0,0) must have high urgency in Channel 3")
 
         # 4. Non-lethal enemy hit reward (+10) vs fatal enemy kill reward (+10 hit + 20 kill)
@@ -865,6 +865,77 @@ class TestGUIArchitecture(unittest.TestCase):
         bot_info = game.getPlayerInfo(2)
         self.assertNotEqual((bot_info.x, bot_info.y), (0, 0), "Cautious DumbBot must retreat from imminent Sudden Death tile")
         bme.set_bot_sd_caution_percent(75)
+
+        # 6. Sudden Death stops at 7x5 interior on 15x13 (4 closed rings)
+        sd_game = bme.Game(15, 13)
+        sd_game.clearBoard()
+        sd_game.addPlayer(7, 6, 1, False)
+        sd_game.addPlayer(8, 6, 2, False)
+        sd_game.setSuddenDeathTimer(0)
+        for _ in range(2500):
+            sd_game.step(1, bme.Command.NONE)
+            if not sd_game.isSuddenDeathActive():
+                break
+        self.assertFalse(sd_game.isSuddenDeathActive(), "Sudden Death should finish after closing 4 rings")
+        grid = sd_game.getBoardGrid()
+        open_coords = [(x, y) for y in range(13) for x in range(15) if grid[y][x] == 0]
+        xs = [x for x, _ in open_coords]
+        ys = [y for _, y in open_coords]
+        self.assertEqual((min(xs), max(xs)), (4, 10), "Remaining open X range must be 4..10 (width 7)")
+        self.assertEqual((min(ys), max(ys)), (4, 8), "Remaining open Y range must be 4..8 (height 5)")
+
+        # 7. AI Observation 15x13 + PowerUp Distinction (17 C++ channels -> 19 RL channels)
+        from bomberman_env import BombermanEnv
+        from rl_utils import compute_bfs_features
+
+        ai_game = bme.Game(15, 13)
+        ai_game.clearBoard()
+        ai_game.addPlayer(1, 1, 1, False)
+        ai_game.addPlayer(13, 11, 2, False)
+        ai_game.addPowerUp(2, 1, "L")  # Lightning
+        ai_game.addPowerUp(3, 1, "S")  # Speed
+        ai_game.addPowerUp(4, 1, "B")  # Extra Bomb ('+')
+        ai_game.addPowerUp(5, 1, "H")  # Hammer
+        ai_game.addPowerUp(6, 1, "R")  # Ring
+        ai_game.givePlayerPowerUp(1, "L")
+        ai_game.givePlayerPowerUp(1, "S")
+
+        state17 = np.asarray(ai_game.getState(1), dtype=np.float32)
+        self.assertEqual(state17.shape, (17, 13, 15))
+        self.assertEqual(state17[10, 1, 2], 1.0, "Channel 10 must encode Lightning ('L')")
+        self.assertEqual(state17[11, 1, 3], 1.0, "Channel 11 must encode Speed ('S')")
+        self.assertEqual(state17[12, 1, 4], 1.0, "Channel 12 must encode Bomb ('+')")
+        self.assertEqual(state17[13, 1, 5], 1.0, "Channel 13 must encode Hammer ('H')")
+        self.assertEqual(state17[14, 1, 6], 1.0, "Channel 14 must encode Ring ('R')")
+        self.assertAlmostEqual(float(state17[15, 0, 0]), 0.3, places=5, msg="Channel 15 must encode bombRadius / 10")
+        self.assertAlmostEqual(float(state17[16, 0, 0]), 0.5, places=5, msg="Channel 16 must encode speedLevel / 2")
+
+        # Duplicate Hammer should be ignored by BFS hunt target selection when Hammer is already owned
+        ai_game.clearBoard()
+        ai_game.addPlayer(1, 1, 1, False)
+        ai_game.addPlayer(13, 11, 2, False)
+        ai_game.givePlayerPowerUp(1, "H")
+        ai_game.addPowerUp(2, 1, "H")  # Redundant Hammer adjacent (d=1)
+        ai_game.addPowerUp(4, 1, "L")  # Useful Lightning at d=3
+        state_dup = np.asarray(ai_game.getState(1), dtype=np.float32)
+        _, _, _, dup_analysis = compute_bfs_features(state_dup, ai_game.getPlayerInfo(1), 15, 13)
+        self.assertEqual(dup_analysis["hunt_action"], 4, "AI BFS should pursue useful Lightning over redundant Hammer")
+
+        env = BombermanEnv(num_bots=1, wall_density=0)
+        obs, _ = env.reset(seed=7)
+        self.assertEqual(obs.shape, (19, 13, 15))
+        self.assertEqual(env.observation_space.shape, (19, 13, 15))
+
+        # 8. Aggressive Enemy Engagement: AI prioritizes attacking/closing on an enemy over farming a wall behind it
+        ai_game.clearBoard()
+        ai_game.addPlayer(5, 5, 1, False)   # Self at (5, 5)
+        ai_game.addPlayer(8, 5, 2, False)   # Enemy to the RIGHT at (8, 5)
+        ai_game.addBreakableWall(2, 5)      # Distraction wall to the LEFT at (2, 5)
+        state_agg = np.asarray(ai_game.getState(1), dtype=np.float32)
+        _, _, phi_at_5, agg_analysis = compute_bfs_features(state_agg, ai_game.getPlayerInfo(1), 15, 13)
+        self.assertEqual(agg_analysis["hunt_action"], 4, "AI must advance RIGHT (4) toward the enemy rather than farming the wall to the LEFT (3)")
+
+
 
 
 

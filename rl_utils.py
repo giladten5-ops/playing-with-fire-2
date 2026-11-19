@@ -13,14 +13,14 @@ DIRS: Dict[int, Tuple[int, int]] = {
 def compute_bfs_features(
     base_obs: np.ndarray,
     tstate: Union[Dict[str, int], Any],
-    width: int = 13,
+    width: int = 15,
     height: int = 13,
 ) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, Any]]:
     """
     Computes tactical BFS reachability map, safe-escape bomb target map,
     PBRS potential phi(s), and tactical analysis metadata from the 10-channel engine state.
     """
-    h, w = height, width
+    h, w = int(base_obs.shape[1]), int(base_obs.shape[2])
     reach_map = np.zeros((h, w), dtype=np.float32)
     bomb_map = np.zeros((h, w), dtype=np.float32)
 
@@ -32,6 +32,7 @@ def compute_bfs_features(
         has_hammer = bool(tstate.get("has_hammer", 0))
         bomb_radius = int(tstate.get("bomb_radius", 2))
         avail_bombs = int(tstate.get("avail_bombs", 0))
+        speed_level = int(tstate.get("speed_level", int(round(float(base_obs[16, 0, 0]) * 2)) if base_obs.shape[0] >= 17 else 0))
         facing_dx = int(tstate.get("facing_dx", 0))
         facing_dy = int(tstate.get("facing_dy", 1))
     else:
@@ -42,6 +43,7 @@ def compute_bfs_features(
         has_hammer = bool(getattr(tstate, "hasHammer", False))
         bomb_radius = int(getattr(tstate, "bombRadius", 2))
         avail_bombs = int(getattr(tstate, "availBombs", 0))
+        speed_level = int(getattr(tstate, "speedLevel", 0))
         facing_dx = int(getattr(tstate, "facingDx", 0))
         facing_dy = int(getattr(tstate, "facingDy", 1))
 
@@ -72,6 +74,16 @@ def compute_bfs_features(
     danger = base_obs[3]
     flames = base_obs[4] > 0.0
     powerups = base_obs[5] > 0.0
+    if base_obs.shape[0] >= 17:
+        useful_powerups = (
+            (base_obs[10] > 0.0)
+            | (base_obs[12] > 0.0)
+            | ((base_obs[11] > 0.0) & (speed_level < 2))
+            | ((base_obs[13] > 0.0) & (not has_hammer))
+            | ((base_obs[14] > 0.0) & (not has_ring))
+        )
+    else:
+        useful_powerups = powerups
     enemies = base_obs[7] > 0.0
 
     in_danger = bool(danger[py, px] > 0.0)
@@ -127,7 +139,7 @@ def compute_bfs_features(
     while q:
         cx, cy = q.popleft()
         d = int(dist[cy, cx])
-        if d >= 14:
+        if d >= 16:
             continue
         for act_id, (dx, dy) in DIRS.items():
             nx, ny = cx + dx, cy + dy
@@ -142,7 +154,7 @@ def compute_bfs_features(
                 if d == 0:
                     valid_moves.append(act_id)
                 if danger[ny, nx] == 0.0:
-                    reach_map[ny, nx] = max(0.1, 1.0 - (d + 1) / 15.0)
+                    reach_map[ny, nx] = max(0.1, 1.0 - (d + 1) / 17.0)
                     if d + 1 < min_safe_dist:
                         min_safe_dist = d + 1
                         escape_action = fa
@@ -260,20 +272,21 @@ def compute_bfs_features(
     total_enemy_safe_tiles = sum(enemy_base_safe.values())
     trapped_enemies_count = sum(1 for (ex, ey), sc in enemy_base_safe.items() if sc == 0)
 
-    def evaluate_enemy_compression_at(bx: int, by: int, radius: int) -> Tuple[int, bool]:
-        """Returns (total_safe_tiles_compressed, traps_any_enemy) if a bomb is placed at (bx, by)."""
+    def evaluate_enemy_compression_at(bx: int, by: int, radius: int) -> Tuple[int, bool, bool]:
+        """Returns (total_safe_tiles_compressed, traps_any_enemy, pins_any_enemy) if a bomb is placed at (bx, by)."""
         if not enemy_Coords:
-            return 0, False
+            return 0, False, False
         nearby = [
             (ex, ey)
             for (ex, ey) in enemy_Coords
-            if abs(ex - bx) + abs(ey - by) <= radius + 4
+            if abs(ex - bx) + abs(ey - by) <= radius + 3
         ]
         if not nearby:
-            return 0, False
+            return 0, False, False
         sim_blast = compute_blast_zone(bx, by, radius)
         total_compressed = 0
         traps_any = False
+        pins_any = False
         for ex, ey in nearby:
             before_sc = enemy_base_safe.get((ex, ey), 0)
             after_sc = count_enemy_safe_tiles(ex, ey, sim_bomb=(bx, by), sim_blast=sim_blast)
@@ -281,7 +294,10 @@ def compute_bfs_features(
             total_compressed += diff
             if before_sc > 0 and after_sc == 0:
                 traps_any = True
-        return total_compressed, traps_any
+                pins_any = True
+            elif diff >= 2 and after_sc <= 4:
+                pins_any = True
+        return total_compressed, traps_any, pins_any
 
     def count_targets_at(bx: int, by: int, radius: int) -> Tuple[int, int, int, bool]:
         t = 0
@@ -301,31 +317,25 @@ def compute_bfs_features(
             t += 3
             enemy_t += 1
 
-        compressed_tiles, traps_enemy = evaluate_enemy_compression_at(bx, by, radius)
+        compressed_tiles, traps_enemy, pins_enemy = evaluate_enemy_compression_at(bx, by, radius)
         if traps_enemy:
             t += 5
             enemy_t = max(enemy_t, 1)
-        elif compressed_tiles >= 2:
+        elif pins_enemy:
             t += min(4, compressed_tiles)
             enemy_t = max(enemy_t, 1)
 
-        # Also count close-proximity enemies (Manhattan dist <= radius + 1) for corridor trapping
-        # and aligned enemies within 6 tiles when Hammer is active (place-and-kick setups)
-        if enemy_t == 0 and len(en_xs) > 0:
-            min_md = int(np.min(np.abs(en_xs - bx) + np.abs(en_ys - by)))
-            if min_md <= radius + 1:
-                t += 2
-                enemy_t += 1
-            elif has_hammer:
-                for _, (dx, dy) in DIRS.items():
-                    for r in range(2, 7):
-                        nx, ny = bx + dx * r, by + dy * r
-                        if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx] or breakable[ny, nx]:
-                            break
-                        if enemies[ny, nx]:
-                            t += 2
-                            enemy_t += 1
-                            break
+        # Count aligned enemies within 6 tiles when Hammer is active (place-and-kick setups)
+        if enemy_t == 0 and has_hammer and len(en_xs) > 0:
+            for _, (dx, dy) in DIRS.items():
+                for r in range(2, 7):
+                    nx, ny = bx + dx * r, by + dy * r
+                    if not (0 <= nx < w and 0 <= ny < h) or solid[ny, nx] or breakable[ny, nx]:
+                        break
+                    if enemies[ny, nx]:
+                        t += 2
+                        enemy_t += 1
+                        break
         return t, enemy_t, compressed_tiles, traps_enemy
 
     can_place_bomb = (avail_bombs > 0) and (not bombs[py, px])
@@ -358,12 +368,26 @@ def compute_bfs_features(
                 bomb_map[ry, rx] = max(float(bomb_map[ry, rx]), bomb_score)
                 bombing_sites.append((int(dist[ry, rx]), rx, ry, t, et, comp_t, trap_t))
 
-    # Sort bombing sites by BFS distance
-    bombing_sites.sort(key=lambda s: s[0])
+    # Sort bombing sites: prioritize sites that attack/trap/compress enemies,
+    # and break ties by closeness to the agent AND closeness to the nearest enemy.
+    def _site_sort_key(s: Tuple[int, int, int, int, int, int, bool]) -> Tuple[int, int, float]:
+        d_site, sx, sy, _t, et, comp_t, trap_t = s
+        is_enemy_attack = 0 if (trap_t or et > 0) else 1
+        if len(en_xs) > 0:
+            en_md = float(np.min(np.abs(en_xs - sx) + np.abs(en_ys - sy)))
+        else:
+            en_md = 0.0
+        # For enemy attack sites, prefer traps/compression and shortest distance;
+        # for wall-breaching sites, prefer walls that advance toward the nearest enemy.
+        score = float(d_site) + (0.65 * en_md if is_enemy_attack == 1 else -0.3 * comp_t)
+        return (is_enemy_attack, 0 if trap_t else 1, score)
+
+    en_ys, en_xs = np.where(enemies)
+    bombing_sites.sort(key=_site_sort_key)
+    enemy_bombing_sites = [s for s in bombing_sites if (s[6] or s[4] > 0)]
 
     hunt_action = 0
-    pu_ys, pu_xs = np.where((powerups) & (dist > 0) & (danger == 0.0))
-    en_ys, en_xs = np.where(enemies)
+    pu_ys, pu_xs = np.where((useful_powerups) & (dist > 0) & (danger == 0.0))
 
     closest_pu_d = 999
     closest_pu_pos = None
@@ -374,38 +398,56 @@ def compute_bfs_features(
                 closest_pu_d = d_u
                 closest_pu_pos = (int(px_u), int(py_u))
 
+    reach_en = (
+        sorted(
+            [(int(dist[ey, ex]), int(ex), int(ey)) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0],
+            key=lambda x: x[0],
+        )
+        if len(en_xs) > 0
+        else []
+    )
+
     if not in_danger:
-        if targets_here > 0 and safe_escape_here:
-            # Standing on an immediate bombing target; BOMB is ready
+        if (enemy_targets_here > 0 or trap_bomb_here) and safe_escape_here:
+            # Immediate offensive strike on enemy in range
             hunt_action = 0
-        elif closest_pu_pos is not None and closest_pu_d <= 4:
-            # Grab nearby powerup first
+        elif enemy_bombing_sites and enemy_bombing_sites[0][0] <= 6:
+            # Close in on an immediate enemy bombing/trapping position
+            target_bx, target_by = enemy_bombing_sites[0][1], enemy_bombing_sites[0][2]
+            hunt_action = int(first_action[target_by, target_bx])
+        elif closest_pu_pos is not None and closest_pu_d <= 3:
+            # Grab very close useful powerup on the way
             hunt_action = int(first_action[closest_pu_pos[1], closest_pu_pos[0]])
+        elif reach_en and reach_en[0][0] <= 8:
+            # Direct path to enemy is open — aggressively close distance to engage
+            hunt_action = int(first_action[reach_en[0][2], reach_en[0][1]])
+        elif enemy_bombing_sites:
+            target_bx, target_by = enemy_bombing_sites[0][1], enemy_bombing_sites[0][2]
+            hunt_action = int(first_action[target_by, target_bx])
+        elif targets_here > 0 and safe_escape_here:
+            # Breach wall at current position if it advances us
+            hunt_action = 0
         elif bombing_sites:
-            # Head toward closest safe bombing opportunity
+            # Breach the wall that best advances toward the enemy
             target_bx, target_by = bombing_sites[0][1], bombing_sites[0][2]
             hunt_action = int(first_action[target_by, target_bx])
+        elif reach_en:
+            hunt_action = int(first_action[reach_en[0][2], reach_en[0][1]])
         elif closest_pu_pos is not None:
-            # Reachable powerup
             hunt_action = int(first_action[closest_pu_pos[1], closest_pu_pos[0]])
         elif len(en_xs) > 0:
-            reach_en = [(int(dist[ey, ex]), int(ex), int(ey)) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0]
-            if reach_en:
-                reach_en.sort(key=lambda x: x[0])
-                hunt_action = int(first_action[reach_en[0][2], reach_en[0][1]])
-            else:
-                # Enemies are blocked behind walls and no bombing sites in range:
-                # Move to reachable tile that minimizes Manhattan distance to closest enemy
-                best_rx, best_ry = px, py
-                min_m_dist = 999
-                for ry, rx in zip(reach_ys, reach_xs):
-                    rx, ry = int(rx), int(ry)
-                    m_d = int(np.min(np.abs(en_xs - rx) + np.abs(en_ys - ry)))
-                    if m_d < min_m_dist:
-                        min_m_dist = m_d
-                        best_rx, best_ry = rx, ry
-                if (best_rx, best_ry) != (px, py):
-                    hunt_action = int(first_action[best_ry, best_rx])
+            # Enemies are blocked behind walls and no bombing sites in range:
+            # Move to reachable tile that minimizes Manhattan distance to closest enemy
+            best_rx, best_ry = px, py
+            min_m_dist = 999
+            for ry, rx in zip(reach_ys, reach_xs):
+                rx, ry = int(rx), int(ry)
+                m_d = int(np.min(np.abs(en_xs - rx) + np.abs(en_ys - ry)))
+                if m_d < min_m_dist:
+                    min_m_dist = m_d
+                    best_rx, best_ry = rx, ry
+            if (best_rx, best_ry) != (px, py):
+                hunt_action = int(first_action[best_ry, best_rx])
 
     safe_reachable_count = int(np.sum((dist >= 0) & (danger == 0.0)))
     phi_space = min(safe_reachable_count, 35) * 0.12
@@ -413,16 +455,19 @@ def compute_bfs_features(
     phi_hunt = 0.0
     if not in_danger:
         if closest_pu_pos is not None:
-            phi_hunt += (15.0 - min(closest_pu_d, 15)) * 0.18
-        if bombing_sites:
+            phi_hunt += (15.0 - min(closest_pu_d, 15)) * 0.16
+        if enemy_bombing_sites:
+            min_ebs_d = enemy_bombing_sites[0][0]
+            phi_hunt += (16.0 - min(min_ebs_d, 16)) * 0.35
+        elif bombing_sites:
             min_bs_d = bombing_sites[0][0]
-            phi_hunt += (15.0 - min(min_bs_d, 15)) * 0.20
-        elif len(en_xs) > 0:
-            reach_en_dists = [int(dist[ey, ex]) for ex, ey in zip(en_xs, en_ys) if dist[ey, ex] >= 0]
-            if reach_en_dists:
-                phi_hunt += (20.0 - min(min(reach_en_dists), 20)) * 0.15
-            else:
-                phi_hunt += (24.0 - min(int(np.min(np.abs(en_xs - px) + np.abs(en_ys - py))), 24)) * 0.08
+            phi_hunt += (15.0 - min(min_bs_d, 15)) * 0.16
+        # Always reward closing distance to the nearest enemy (even while walls exist)
+        if len(en_xs) > 0:
+            min_en_manhattan = int(np.min(np.abs(en_xs - px) + np.abs(en_ys - py)))
+            phi_hunt += (26.0 - min(min_en_manhattan, 26)) * 0.18
+            if reach_en:
+                phi_hunt += (22.0 - min(reach_en[0][0], 22)) * 0.30
 
     active_bombs_count = int(np.sum(bombs))
 
@@ -582,9 +627,13 @@ def format_obs(
     base_obs: np.ndarray,
     reach_map: np.ndarray,
     bomb_map: np.ndarray,
-    expected_channels: int = 12,
+    expected_channels: int = 19,
 ) -> np.ndarray:
-    """Formats the multi-channel observation tensor for 8, 10, or 12 channel policies."""
+    """Formats the multi-channel observation tensor for 8, 10, 12, or 19 channel policies."""
+    if expected_channels == 19:
+        return np.concatenate([base_obs, reach_map[None, ...], bomb_map[None, ...]], axis=0)
+    if expected_channels == 12:
+        return np.concatenate([base_obs[:10], reach_map[None, ...], bomb_map[None, ...]], axis=0)
     if expected_channels == 10:
         return np.concatenate([base_obs[:8], reach_map[None, ...], bomb_map[None, ...]], axis=0)
     if expected_channels == 8:

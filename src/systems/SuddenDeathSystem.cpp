@@ -6,7 +6,7 @@
 
 SuddenDeathSystem::SuddenDeathSystem(int startDelayTicks, int boardWidth, int boardHeight)
     : m_ticksUntilStart(startDelayTicks),
-      m_dropCooldown(15), // 15 frames at 30 FPS = 2 tiles per second
+      m_dropCooldown(10), // 10 frames cooldown = 1 tile every 11 ticks (~31% faster closure)
       m_currentCooldown(0),
       m_minX(0), m_maxX(boardWidth - 1),
       m_minY(0), m_maxY(boardHeight - 1),
@@ -55,7 +55,7 @@ std::vector<SuddenDeathDangerTile> SuddenDeathSystem::getImminentDangerTiles(int
         x += dx;
         y += dy;
 
-        if (minX > maxX || minY > maxY || (maxX - minX <= 4 && maxY - minY <= 4)) {
+        if (minX > maxX || minY > maxY || ((maxX - minX + 1) <= 7 && (maxY - minY + 1) <= 6)) {
             finished = true;
         } else {
             ticksUntilNext += m_dropCooldown + 1;
@@ -101,7 +101,7 @@ void SuddenDeathSystem::process(World& world) {
             m_x += m_dx;
             m_y += m_dy;
 
-            if (m_minX > m_maxX || m_minY > m_maxY || (m_maxX - m_minX <= 4 && m_maxY - m_minY <= 4)) {
+            if (m_minX > m_maxX || m_minY > m_maxY || ((m_maxX - m_minX + 1) <= 7 && (m_maxY - m_minY + 1) <= 6)) {
                 m_isFinished = true;
             } else {
                 m_currentCooldown = m_dropCooldown;

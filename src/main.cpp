@@ -13,11 +13,11 @@
 #include "../include/core/ConsoleInput.h"
 
 namespace {
-    constexpr int BOARD_WIDTH = 13;
+    constexpr int BOARD_WIDTH = 15;
     constexpr int BOARD_HEIGHT = 13;
     constexpr int MAX_TOTAL_PARTICIPANTS = 4;
     constexpr int MAX_HUMAN_PLAYERS = 2;
-    constexpr int TARGET_FPS = 30;
+    constexpr int TARGET_FPS = 24;
     constexpr int FRAME_DURATION_MS = 1000 / TARGET_FPS;
 }
 

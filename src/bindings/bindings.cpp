@@ -122,7 +122,7 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("getState", [](const Game& self, int playerId) {
             const int width = self.getWorld().getBoard().getWidth();
             const int height = self.getWorld().getBoard().getHeight();
-            constexpr int channels = 10;
+            constexpr int channels = 17;
             py::array_t<float> result({channels, height, width});
             float* ptr = static_cast<float*>(result.request().ptr);
             std::fill(ptr, ptr + (channels * height * width), 0.0f);
