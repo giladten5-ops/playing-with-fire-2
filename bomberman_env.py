@@ -171,12 +171,17 @@ class BombermanEnv(gym.Env):
                 )
                 with th.no_grad():
                     opp_mask = compute_action_mask(opp_analysis)
+                    obs_t = th.as_tensor(opp_obs[None], dtype=th.float32)
                     try:
-                        raw_act, _ = opp_model.predict(
-                            opp_obs, action_masks=opp_mask, deterministic=False
-                        )
-                    except (TypeError, ValueError):
-                        raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
+                        dist = opp_model.policy.get_distribution(obs_t, action_masks=opp_mask[None])
+                        raw_act = int(dist.get_actions(deterministic=False).item())
+                    except Exception:
+                        try:
+                            raw_act, _ = opp_model.predict(
+                                opp_obs, action_masks=opp_mask, deterministic=False
+                            )
+                        except (TypeError, ValueError):
+                            raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
                 exec_act, _ = apply_tactical_shield(
                     int(raw_act), opp_analysis, rng=self.np_random
                 )

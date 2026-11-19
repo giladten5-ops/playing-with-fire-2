@@ -200,10 +200,10 @@ def make_train_env(
         seed_everything(worker_seed)
         slot = rank % 4
         has_sp = bool(self_play_model_path and os.path.exists(self_play_model_path))
-        # Slot 0: 1v1 Self-Play Duel (or 1v1 DumbBot if no self-play model yet) (45% walls)
-        # Slot 1: 1v2 Mixed League combat (1 Self-Play AI + 1 DumbBot, 55% walls)
+        # Slot 0: 1v1 Duel (Self-Play AI if enabled, else DumbBot) (45% walls)
+        # Slot 1: 1v2 DumbBot tactical combat (55% walls)
         # Slot 2: 1v3 Full standard DumbBot match (65% walls — prevents catastrophic forgetting)
-        # Slot 3: Randomized League curriculum (varying AI/DumbBot mix, wall densities, powerups, Sudden Death)
+        # Slot 3: Randomized curriculum (varying DumbBot count, wall densities, powerups, Sudden Death, optional Self-Play)
         if slot == 0:
             env = BombermanEnv(
                 num_bots=1,
@@ -215,8 +215,7 @@ def make_train_env(
         elif slot == 1:
             env = BombermanEnv(
                 num_bots=2,
-                num_ai_opponents=1 if has_sp else 0,
-                self_play_model_path=self_play_model_path if has_sp else None,
+                num_ai_opponents=0,
                 wall_density=55,
                 randomize_curriculum=False,
             )
@@ -241,15 +240,13 @@ def make_train_env(
 
 
 def make_eval_env(base_seed: int, self_play_model_path: Optional[str] = None) -> Callable[[], Monitor]:
-    """Create a lightweight in-process evaluation environment with curriculum coverage."""
+    """Create a lightweight in-process evaluation environment against DumbBots."""
     def _init() -> Monitor:
         eval_seed = base_seed + 50000
         seed_everything(eval_seed)
-        has_sp = bool(self_play_model_path and os.path.exists(self_play_model_path))
         env = BombermanEnv(
             num_bots=2,
-            num_ai_opponents=1 if has_sp else 0,
-            self_play_model_path=self_play_model_path if has_sp else None,
+            num_ai_opponents=0,
             wall_density=55,
             randomize_curriculum=True,
         )
@@ -279,9 +276,14 @@ def main() -> None:
         help="Optional frozen checkpoint .zip for Self-Play opponents (defaults to --resume checkpoint if omitted).",
     )
     parser.add_argument(
+        "--self-play",
+        action="store_true",
+        help="Enable Self-Play against --self-play-model (or --resume checkpoint if --self-play-model is omitted).",
+    )
+    parser.add_argument(
         "--no-self-play",
         action="store_true",
-        help="Disable Self-Play AI opponents even when --resume is provided.",
+        help="Explicitly disable Self-Play AI opponents (default behavior unless --self-play or --self-play-model is passed).",
     )
     parser.add_argument(
         "--mask-actions",
@@ -311,13 +313,9 @@ def main() -> None:
     os.makedirs("models/v3_best", exist_ok=True)
 
     sp_model_path: Optional[str] = None
-    if not args.no_self_play:
+    use_self_play = (bool(args.self_play) or bool(args.self_play_model)) and (not args.no_self_play)
+    if use_self_play:
         candidate_sp = args.self_play_model or args.resume
-        if candidate_sp is None:
-            # Generation-2: Default to Grandmaster model if available
-            default_gm = "models/v7_grandmaster_full/best/best_model.zip"
-            if os.path.exists(default_gm):
-                candidate_sp = default_gm
         if candidate_sp and os.path.exists(candidate_sp):
             loaded_sp, _ = _get_shared_opponent_model(candidate_sp, 13, 15)
             if loaded_sp is not None:
@@ -328,9 +326,11 @@ def main() -> None:
                 print(f"🤖 League Self-Play Enabled — Opponent Snapshot: {candidate_sp}", flush=True)
             else:
                 print(
-                    f"ℹ️ Skipping incompatible Self-Play checkpoint ({candidate_sp} is not 15x13); using BFS/DumbBot opponents for this run.",
+                    f"ℹ️ Skipping incompatible Self-Play checkpoint ({candidate_sp} is not 15x13); using DumbBot opponents.",
                     flush=True,
                 )
+    else:
+        print("🎯 Stage-1 Bot Mastery Mode (Self-Play OFF — pass --self-play to enable League Self-Play).", flush=True)
 
     seed_everything(args.seed)
     gc.collect()

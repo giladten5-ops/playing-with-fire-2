@@ -2,6 +2,11 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
+try:
+    import bomberman_engine as _bme
+except ImportError:
+    _bme = None
+
 DIRS: Dict[int, Tuple[int, int]] = {
     1: (0, -1),
     2: (0, 1),
@@ -18,12 +23,9 @@ def compute_bfs_features(
 ) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, Any]]:
     """
     Computes tactical BFS reachability map, safe-escape bomb target map,
-    PBRS potential phi(s), and tactical analysis metadata from the 10-channel engine state.
+    PBRS potential phi(s), and tactical analysis metadata from the engine state.
+    Delegates to the compiled C++17 implementation when available.
     """
-    h, w = int(base_obs.shape[1]), int(base_obs.shape[2])
-    reach_map = np.zeros((h, w), dtype=np.float32)
-    bomb_map = np.zeros((h, w), dtype=np.float32)
-
     if isinstance(tstate, dict):
         is_alive = bool(tstate.get("is_alive", 0))
         px = int(tstate.get("x", -1))
@@ -46,6 +48,23 @@ def compute_bfs_features(
         speed_level = int(getattr(tstate, "speedLevel", 0))
         facing_dx = int(getattr(tstate, "facingDx", 0))
         facing_dy = int(getattr(tstate, "facingDy", 1))
+
+    if _bme is not None and hasattr(_bme, "compute_bfs_features"):
+        return _bme.compute_bfs_features(
+            base_obs,
+            is_alive,
+            px,
+            py,
+            has_ring,
+            has_hammer,
+            bomb_radius,
+            avail_bombs,
+            speed_level,
+        )
+
+    h, w = int(base_obs.shape[1]), int(base_obs.shape[2])
+    reach_map = np.zeros((h, w), dtype=np.float32)
+    bomb_map = np.zeros((h, w), dtype=np.float32)
 
     if not is_alive:
         return reach_map, bomb_map, 0.0, {
@@ -631,7 +650,10 @@ def format_obs(
 ) -> np.ndarray:
     """Formats the multi-channel observation tensor for 8, 10, 12, or 19 channel policies."""
     if expected_channels == 19:
-        return np.concatenate([base_obs, reach_map[None, ...], bomb_map[None, ...]], axis=0)
+        if base_obs.shape[0] < 17:
+            pad = np.zeros((17 - base_obs.shape[0], base_obs.shape[1], base_obs.shape[2]), dtype=base_obs.dtype)
+            base_obs = np.concatenate([base_obs, pad], axis=0)
+        return np.concatenate([base_obs[:17], reach_map[None, ...], bomb_map[None, ...]], axis=0)
     if expected_channels == 12:
         return np.concatenate([base_obs[:10], reach_map[None, ...], bomb_map[None, ...]], axis=0)
     if expected_channels == 10:
