@@ -1368,18 +1368,36 @@ class TestGUIArchitecture(unittest.TestCase):
         alive_t0 = sum(1 for pid in (2, 3, 4) if match.getPlayerInfo(pid).isAlive)
         self.assertEqual(alive_t0, 3, "Tier 0 DumbBots must not commit self-suicide on their own bombs")
 
-        # 3. Curriculum Phase 1 (slot 0) spawns 1-HP Tier 0 opponent, while Phase 3 & default Eval spawn 3-HP Tier 2
-        env_p1 = BombermanEnv(curriculum_slot=0, worker_target_steps=1000)
-        env_p1.reset(seed=5)
-        self.assertEqual(env_p1.game.getPlayerInfo(1).lives, 3, "Player 1 must always start with 3 lives")
-        self.assertEqual(env_p1.game.getPlayerInfo(2).lives, 1, "Phase 1 Slot 0 opponent must start with 1 HP (Tier 0)")
+        # 3. Smoothed 3-Phase Curriculum verification (Phase 1: 0-35%, Phase 2: 35-70%, Phase 3: 70-100%)
+        # Phase 1: Slot 0 -> Tier 0 (1 HP), Slot 2 -> Tier 1 (2 HP), Slot 3 -> Tier 2 (3 HP)
+        env_s0 = BombermanEnv(curriculum_slot=0, worker_target_steps=1000)
+        env_s0.reset(seed=5)
+        self.assertEqual(env_s0.game.getPlayerInfo(1).lives, 3, "Player 1 must always start with 3 lives")
+        self.assertEqual(env_s0.game.getPlayerInfo(2).lives, 1, "Phase 1 Slot 0 opponent must start with 1 HP (Tier 0)")
 
-        env_p1._worker_steps_completed = 700  # 70% -> Phase 3
-        env_p1.reset(seed=6)
-        self.assertEqual(env_p1.game.getPlayerInfo(2).lives, 3, "Phase 3 opponent must start with full 3 HP (Tier 2)")
+        env_s2 = BombermanEnv(curriculum_slot=2, worker_target_steps=1000)
+        env_s2.reset(seed=5)
+        self.assertEqual(env_s2.game.getPlayerInfo(2).lives, 2, "Phase 1 Slot 2 opponent must start with 2 HP (Tier 1)")
 
+        # Phase 2 (50%): Slot 0 retains 1-HP Tier 0 anchor, Slot 2 -> 2-HP Tier 1.5, Slot 3 -> 3-HP Tier 2
+        env_s0._worker_steps_completed = 500
+        env_s0.reset(seed=6)
+        self.assertEqual(env_s0.game.getPlayerInfo(2).lives, 1, "Phase 2 Slot 0 must retain 1-HP Tier 0 combat anchor")
+        env_s2._worker_steps_completed = 500
+        env_s2.reset(seed=6)
+        self.assertEqual(env_s2.game.getPlayerInfo(2).lives, 2, "Phase 2 Slot 2 must be 2-HP Tier 1.5")
+
+        # Phase 3 (80%): Slot 0 -> 2-HP Tier 1 combat anchor, Slot 2 -> full 3-HP Tier 2
+        env_s0._worker_steps_completed = 800
+        env_s0.reset(seed=7)
+        self.assertEqual(env_s0.game.getPlayerInfo(2).lives, 2, "Phase 3 Slot 0 (bot-only) must retain 2-HP Tier 1 anchor")
+        env_s2._worker_steps_completed = 800
+        env_s2.reset(seed=7)
+        self.assertEqual(env_s2.game.getPlayerInfo(2).lives, 3, "Phase 3 Slot 2 opponent must start with full 3 HP (Tier 2)")
+
+        # Default/Eval env opponents must always remain full 3-HP Tier 2
         env_eval = BombermanEnv(num_bots=2, wall_density=55, randomize_curriculum=False)
-        env_eval.reset(seed=7)
+        env_eval.reset(seed=8)
         self.assertEqual(env_eval.game.getPlayerInfo(2).lives, 3, "Default/Eval env opponents must always be full 3 HP (Tier 2)")
 
 

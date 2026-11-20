@@ -494,8 +494,8 @@ class BombermanEnv(gym.Env):
             progress = min(1.0, float(self._worker_steps_completed) / float(max(1, self.worker_target_steps)))
             slot = int(self.curriculum_slot) % 4
             has_sp = bool(self.self_play_model_path and os.path.exists(self.self_play_model_path))
-            if progress < 0.30:
-                # Phase 1 (0%-30%): Opponent Difficulty Progression — Tier 0 (1 HP, 12t) + Tier 1 + Tier 2 anchor
+            if progress < 0.35:
+                # Phase 1 (0%-35%): Smooth Opponent Progression — 50% Tier 0 (1 HP, 12t) | 25% Tier 1 (2 HP, 18t) | 25% Tier 2 anchor
                 if slot == 0:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 30, 1200, 0
                     opp_lives, opp_enemy_bomb_lookahead = 1, 12
@@ -503,44 +503,47 @@ class BombermanEnv(gym.Env):
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 40, 1200, 0
                     opp_lives, opp_enemy_bomb_lookahead = 1, 12
                 elif slot == 2:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 50, 1200, 0
-                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 45, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 18
                 else:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 3, 65, 1200, 0
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 55, 1200, 0
                     opp_lives, opp_enemy_bomb_lookahead = 3, 9999
-            elif progress < 0.65:
-                # Phase 2 (30%-65%): Intermediate & Full Standard Combat — Tier 1 (2 HP, 30t) + Tier 2
+            elif progress < 0.70:
+                # Phase 2 (35%-70%): Overlapping Ladder — 25% Tier 0 (12t) | 25% Tier 1 (18t) | 25% Tier 1.5 (24t) | 25% Tier 2 (9999t)
                 if slot == 0:
                     active_bots, active_density, active_sd_ticks = 1, 35, 1000
                     active_ai_opps = 1 if has_sp else 0
-                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
+                    opp_lives, opp_enemy_bomb_lookahead = 1, 12
                 elif slot == 1:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 45, 1200, 0
-                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 45, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 18
                     starting_powerup_chance = 0.15
                     starting_powerup_pool = ["H", "R"]
                 elif slot == 2:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 55, 1200, 0
-                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 50, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 24
                 else:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 3, 65, 1200, 0
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 60, 1200, 0
                     opp_lives, opp_enemy_bomb_lookahead = 3, 9999
             else:
-                # Phase 3 (65%-100%): 100% Full Standard Tier 2 (3 HP, full 9999 reaction) + optional Self-Play
-                opp_lives, opp_enemy_bomb_lookahead = 3, 9999
+                # Phase 3 (70%-100%): Combat Consolidation & Full Standard — 25% Tier 1 (or Self-Play) | 25% Tier 1.5 | 50% Tier 2
                 if slot == 0:
                     active_bots, active_density, active_sd_ticks = 1, 40, 1000
                     active_ai_opps = 1 if has_sp else 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 18
                 elif slot == 1:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 50, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 24
                 elif slot == 2:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 3, 65, 1200, 0
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 60, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
                 else:
                     active_bots = int(self.np_random.choice([2, 3], p=[0.40, 0.60]))
                     active_density = int(self.np_random.choice([35, 50, 65, 75], p=[0.20, 0.30, 0.35, 0.15]))
                     active_sd_ticks = int(self.np_random.choice([900, 1200, 1500]))
                     active_ai_opps = int(self.np_random.integers(0, min(2, active_bots) + 1)) if has_sp else 0
                     starting_powerup_chance = 0.15
+                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
         elif self.randomize_curriculum:
             active_bots = int(self.np_random.choice([1, 2, 3], p=[0.25, 0.35, 0.40]))
             active_density = int(self.np_random.choice([35, 50, 65, 75], p=[0.20, 0.30, 0.35, 0.15]))
