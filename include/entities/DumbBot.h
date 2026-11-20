@@ -24,6 +24,7 @@ private:
     int m_sdLookaheadTicks = 60;
     int m_sdDecisionTimer = 0;
     bool m_sdAwareThisWindow = true;
+    int m_enemyBombLookaheadTicks = 9999;
 
     bool canStepOn(int x, int y, const World& world) const;
     bool hasClearBlastPath(int bx, int by, int tx, int ty, const World& world) const;
@@ -40,4 +41,7 @@ public:
     std::string getDisplayName() const override;
     char getDisplayChar() const override;
     void update(World& world) override;
+
+    void setEnemyBombLookaheadTicks(int ticks);
+    int getEnemyBombLookaheadTicks() const;
 };

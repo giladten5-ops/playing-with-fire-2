@@ -103,6 +103,8 @@ public:
     void addBomb(int x, int y, int timer, int radius, int ownerId);
     void addPowerUp(int x, int y, const std::string& type);
     void givePlayerPowerUp(int playerId, const std::string& type);
+    void setPlayerLives(int playerId, int lives);
+    void setBotEnemyBombLookahead(int playerId, int ticks);
 
     void update(Command command = Command::NONE);
     void update(const std::vector<PlayerCommand>& commands);

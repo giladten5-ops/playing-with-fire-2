@@ -1335,6 +1335,53 @@ class TestGUIArchitecture(unittest.TestCase):
         closed_count = sum(1 for y in range(13) for x in range(15) if grid[y][x] == 1)
         self.assertEqual(closed_count, 160, "Exactly 160 perimeter tiles must be closed across 4 rings")
 
+    def test_opponent_skill_tiers_and_zero_self_suicide(self) -> None:
+        """Verify Tier 0 DumbBot (1 HP, 12-tick enemy lookahead) avoids self-suicide, reacts late to enemy bombs, and Phase 3/Eval use full 3-HP Tier 2."""
+        import bomberman_engine as bme
+        from rl.bomberman_env import BombermanEnv
+
+        # 1. Tier 0 DumbBot placed next to an enemy bomb with timer=80 ignores it until timer <= 12,
+        #    while STILL immediately escaping its own bomb at timer=89 (zero self-suicide).
+        game = bme.Game(15, 13)
+        game.clearBoard()
+        game.addPlayer(1, 1, 1, False)
+        game.addPlayer(7, 6, 2, True)  # DumbBot at (7, 6)
+        game.setPlayerLives(2, 1)
+        game.setBotEnemyBombLookahead(2, 12)
+        self.assertEqual(game.getPlayerInfo(2).lives, 1)
+
+        # Own bomb at (7, 6) with timer=89 -> bot MUST immediately step off (7, 6) on tick 1!
+        game.addBomb(7, 6, 89, 2, 2)
+        game.step(1, bme.Command.NONE)
+        b_after_own = game.getPlayerInfo(2)
+        self.assertNotEqual((b_after_own.x, b_after_own.y), (7, 6), "Tier 0 bot must immediately escape its OWN bomb")
+
+        # 2. Full 240-tick self-survival check for 3 Tier-0 DumbBots (must not blow themselves up)
+        bme.seed_rng(42)
+        match = bme.Game(15, 13)
+        match.reset(bme.ClassicLevel(4, 15, 13, 65), 1, 3)
+        for pid in (2, 3, 4):
+            match.setPlayerLives(pid, 1)
+            match.setBotEnemyBombLookahead(pid, 12)
+        for _ in range(240):
+            match.update(bme.Command.NONE)
+        alive_t0 = sum(1 for pid in (2, 3, 4) if match.getPlayerInfo(pid).isAlive)
+        self.assertEqual(alive_t0, 3, "Tier 0 DumbBots must not commit self-suicide on their own bombs")
+
+        # 3. Curriculum Phase 1 (slot 0) spawns 1-HP Tier 0 opponent, while Phase 3 & default Eval spawn 3-HP Tier 2
+        env_p1 = BombermanEnv(curriculum_slot=0, worker_target_steps=1000)
+        env_p1.reset(seed=5)
+        self.assertEqual(env_p1.game.getPlayerInfo(1).lives, 3, "Player 1 must always start with 3 lives")
+        self.assertEqual(env_p1.game.getPlayerInfo(2).lives, 1, "Phase 1 Slot 0 opponent must start with 1 HP (Tier 0)")
+
+        env_p1._worker_steps_completed = 700  # 70% -> Phase 3
+        env_p1.reset(seed=6)
+        self.assertEqual(env_p1.game.getPlayerInfo(2).lives, 3, "Phase 3 opponent must start with full 3 HP (Tier 2)")
+
+        env_eval = BombermanEnv(num_bots=2, wall_density=55, randomize_curriculum=False)
+        env_eval.reset(seed=7)
+        self.assertEqual(env_eval.game.getPlayerInfo(2).lives, 3, "Default/Eval env opponents must always be full 3 HP (Tier 2)")
+
 
 
 

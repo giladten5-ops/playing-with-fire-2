@@ -486,36 +486,48 @@ class BombermanEnv(gym.Env):
         active_sd_ticks = self.sudden_death_ticks
         starting_powerup_chance = 0.0
         starting_powerup_pool: List[str] = ["H", "R", "S", "B", "L"]
+        # Opponent difficulty tier (default: Full Standard Tier 2 -> 3 HP, 9999-tick instant reaction)
+        opp_lives = 3
+        opp_enemy_bomb_lookahead = 9999
 
         if self.curriculum_slot is not None and self.worker_target_steps > 0:
             progress = min(1.0, float(self._worker_steps_completed) / float(max(1, self.worker_target_steps)))
             slot = int(self.curriculum_slot) % 4
             has_sp = bool(self.self_play_model_path and os.path.exists(self.self_play_model_path))
-            if progress < 0.25:
-                # Phase 1: Foundation, fuse escape, crate breaching & 1v1 approach
+            if progress < 0.30:
+                # Phase 1 (0%-30%): Opponent Difficulty Progression — Tier 0 (1 HP, 12t) + Tier 1 + Tier 2 anchor
                 if slot == 0:
-                    active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 30, 1500, 0
+                    active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 30, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 1, 12
                 elif slot == 1:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 1, 40, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 1, 12
                 elif slot == 2:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 50, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
                 else:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 3, 65, 1200, 0
-            elif progress < 0.60:
-                # Phase 2: Offensive pressure, controlled special abilities & multi-bot combat
+                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
+            elif progress < 0.65:
+                # Phase 2 (30%-65%): Intermediate & Full Standard Combat — Tier 1 (2 HP, 30t) + Tier 2
                 if slot == 0:
                     active_bots, active_density, active_sd_ticks = 1, 35, 1000
                     active_ai_opps = 1 if has_sp else 0
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
                 elif slot == 1:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 45, 1200, 0
-                    starting_powerup_chance = 0.20
+                    opp_lives, opp_enemy_bomb_lookahead = 2, 30
+                    starting_powerup_chance = 0.15
                     starting_powerup_pool = ["H", "R"]
                 elif slot == 2:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 2, 55, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
                 else:
                     active_bots, active_density, active_sd_ticks, active_ai_opps = 3, 65, 1200, 0
+                    opp_lives, opp_enemy_bomb_lookahead = 3, 9999
             else:
-                # Phase 3: Full match competence & generalization with retained duel exposure
+                # Phase 3 (65%-100%): 100% Full Standard Tier 2 (3 HP, full 9999 reaction) + optional Self-Play
+                opp_lives, opp_enemy_bomb_lookahead = 3, 9999
                 if slot == 0:
                     active_bots, active_density, active_sd_ticks = 1, 40, 1000
                     active_ai_opps = 1 if has_sp else 0
@@ -545,6 +557,15 @@ class BombermanEnv(gym.Env):
             1 + active_ai_opps,
             active_dumb_bots,
         )
+
+        # Apply instance-level opponent skill tier to DumbBot opponents only (never modifies Player 1)
+        if opp_lives < 3 or opp_enemy_bomb_lookahead < 9999:
+            for pid in range(2, 2 + active_bots):
+                if pid not in self._active_ai_opponent_ids:
+                    if opp_lives < 3:
+                        self.game.setPlayerLives(pid, opp_lives)
+                    if opp_enemy_bomb_lookahead < 9999:
+                        self.game.setBotEnemyBombLookahead(pid, opp_enemy_bomb_lookahead)
 
         if active_sd_ticks is not None:
             self.game.setSuddenDeathTimer(int(active_sd_ticks))

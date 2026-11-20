@@ -39,6 +39,8 @@ DumbBot::DumbBot(int startX, int startY, int id)
 
 bool DumbBot::isBot() const { return true; }
 std::string DumbBot::getDisplayName() const { return "BOT" + std::to_string(getId()); }
+void DumbBot::setEnemyBombLookaheadTicks(int ticks) { m_enemyBombLookaheadTicks = std::clamp(ticks, 0, 9999); }
+int DumbBot::getEnemyBombLookaheadTicks() const { return m_enemyBombLookaheadTicks; }
 
 char DumbBot::getDisplayChar() const {
     if (Player::getDisplayChar() == ' ') return ' ';
@@ -115,6 +117,7 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
         int y;
         int radius;
         int timer;
+        bool isOwn;
     };
     std::vector<BombData> bombs;
 
@@ -127,7 +130,8 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
                 }
             } else if (entity->getType() == EntityType::BOMB) {
                 const auto* b = static_cast<const Bomb*>(entity.get());
-                bombs.push_back({b->getX(), b->getY(), b->getRadius(), b->getTimer()});
+                bool isOwnBomb = (b->getOwnerId() == getId() && b->getCreditOwnerId() == getId());
+                bombs.push_back({b->getX(), b->getY(), b->getRadius(), b->getTimer(), isOwnBomb});
                 if (b->isSliding()) {
                     int sdx = b->getSlideDx();
                     int sdy = b->getSlideDy();
@@ -139,7 +143,7 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
                         if (!Bomb::canSlideTo(world, nx, ny)) break;
                         sx = nx;
                         sy = ny;
-                        bombs.push_back({sx, sy, b->getRadius(), std::max(1, b->getTimer())});
+                        bombs.push_back({sx, sy, b->getRadius(), std::max(1, b->getTimer()), isOwnBomb});
                     }
                 }
             }
@@ -152,7 +156,7 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
     }
 
     if (extraBx >= 0 && extraBy >= 0) {
-        bombs.push_back({extraBx, extraBy, extraRadius, DEFAULT_BOMB_TIMER});
+        bombs.push_back({extraBx, extraBy, extraRadius, DEFAULT_BOMB_TIMER, true});
     }
 
     if (bombs.empty()) return sdMinTimer;
@@ -179,6 +183,9 @@ int DumbBot::getTileTimeToExplode(int x, int y, const World& world, int extraBx,
 
     int minTimer = sdMinTimer;
     for (const auto& b : bombs) {
+        if (!b.isOwn && b.timer > m_enemyBombLookaheadTicks) {
+            continue;
+        }
         if (b.x == x && std::abs(b.y - y) <= b.radius) {
             if (hasClearBlastPath(b.x, b.y, x, y, world)) {
                 minTimer = std::min(minTimer, b.timer);

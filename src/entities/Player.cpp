@@ -185,3 +185,8 @@ void Player::increaseMaxBombs() { m_maxBombs++; }
 void Player::increaseSpeed() { if (m_speedLevel < MAX_SPEED_LEVEL) m_speedLevel++; }
 void Player::enableHammer() { m_hasHammer = true; }
 void Player::enableRing() { m_hasRing = true; }
+void Player::setLives(int lives) {
+    if (lives < 1) lives = 1;
+    if (lives > INITIAL_LIVES) lives = INITIAL_LIVES;
+    m_lives = lives;
+}

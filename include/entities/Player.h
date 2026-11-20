@@ -72,4 +72,5 @@ public:
     void increaseSpeed();
     void enableHammer();
     void enableRing();
+    void setLives(int lives);
 };

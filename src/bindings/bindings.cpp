@@ -948,6 +948,8 @@ PYBIND11_MODULE(bomberman_engine, m) {
         .def("addBomb", &Game::addBomb)
         .def("addPowerUp", &Game::addPowerUp)
         .def("givePlayerPowerUp", &Game::givePlayerPowerUp)
+        .def("setPlayerLives", &Game::setPlayerLives, py::arg("playerId"), py::arg("lives"))
+        .def("setBotEnemyBombLookahead", &Game::setBotEnemyBombLookahead, py::arg("playerId"), py::arg("ticks"))
         .def("isGameOver", &Game::isGameOver)
         .def("getWinnerId", &Game::getWinnerId)
         .def("getSuddenDeathTimer", &Game::getSuddenDeathTimer)

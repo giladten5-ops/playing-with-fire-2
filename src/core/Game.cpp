@@ -200,6 +200,18 @@ void Game::givePlayerPowerUp(int playerId, const std::string& type) {
     else if (type == "speed" || type == "S") p->increaseSpeed();
 }
 
+void Game::setPlayerLives(int playerId, int lives) {
+    Player* p = m_world.getPlayer(playerId);
+    if (!p || !p->isAlive()) return;
+    p->setLives(lives);
+}
+
+void Game::setBotEnemyBombLookahead(int playerId, int ticks) {
+    Player* p = m_world.getPlayer(playerId);
+    if (!p || !p->isAlive() || !p->isBot()) return;
+    static_cast<DumbBot*>(p)->setEnemyBombLookaheadTicks(ticks);
+}
+
 void Game::fillState(int playerId, float* state) const {
     const Board& board = m_world.getBoard();
     int width = board.getWidth();
