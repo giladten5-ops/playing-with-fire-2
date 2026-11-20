@@ -626,8 +626,8 @@ class TestGUIArchitecture(unittest.TestCase):
         """Verify Hammer walk-into bomb push, priority over Ring, PLACE_BOMB semantics, sliding danger, Sudden Death danger, and cooldown stepping."""
         import numpy as np
         import bomberman_engine as bme
-        from bomberman_env import BombermanEnv
-        from rl_utils import apply_tactical_shield, compute_bfs_features
+        from rl.bomberman_env import BombermanEnv
+        from rl.rl_utils import apply_tactical_shield, compute_bfs_features
 
         # 1. Hammer walk-into bomb push & priority over Ring; PLACE_BOMB strictly places bombs
         game = bme.Game(13, 13)
@@ -885,8 +885,8 @@ class TestGUIArchitecture(unittest.TestCase):
         self.assertEqual((min(ys), max(ys)), (4, 8), "Remaining open Y range must be 4..8 (height 5)")
 
         # 7. AI Observation 15x13 + PowerUp Distinction (17 C++ channels -> 19 RL channels)
-        from bomberman_env import BombermanEnv
-        from rl_utils import compute_bfs_features
+        from rl.bomberman_env import BombermanEnv
+        from rl.rl_utils import compute_bfs_features
 
         ai_game = bme.Game(15, 13)
         ai_game.clearBoard()
@@ -921,10 +921,16 @@ class TestGUIArchitecture(unittest.TestCase):
         _, _, _, dup_analysis = compute_bfs_features(state_dup, ai_game.getPlayerInfo(1), 15, 13)
         self.assertEqual(dup_analysis["hunt_action"], 4, "AI BFS should pursue useful Lightning over redundant Hammer")
 
+        # Option B default: 17 pure C++ channels (no BFS cheating channels) + clean physics/suicide action mask
         env = BombermanEnv(num_bots=1, wall_density=0)
         obs, _ = env.reset(seed=7)
-        self.assertEqual(obs.shape, (19, 13, 15))
-        self.assertEqual(env.observation_space.shape, (19, 13, 15))
+        self.assertEqual(obs.shape, (17, 13, 15))
+        self.assertEqual(env.observation_space.shape, (17, 13, 15))
+
+        # Option C legacy mode preserved via use_bfs_channels=True (19 channels)
+        env_legacy = BombermanEnv(num_bots=1, wall_density=0, use_bfs_channels=True, mask_mode="legacy")
+        obs_legacy, _ = env_legacy.reset(seed=7)
+        self.assertEqual(obs_legacy.shape, (19, 13, 15))
 
         # 8. Aggressive Enemy Engagement: AI prioritizes attacking/closing on an enemy over farming a wall behind it
         ai_game.clearBoard()

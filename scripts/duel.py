@@ -39,14 +39,20 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("TORCH_NUM_THREADS", "1")
 
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import bomberman_engine as bme
-from bomberman_env import BombermanCNN
+from rl.bomberman_env import BombermanCNN
 from gui.controllers import PPOAgentController
 from gui.engine_adapter import CppGameSession
 
 
-DEFAULT_V8_PATH = "models/v8_masked_pilot_v2/best/best_model.zip"
-DEFAULT_V7_PATH = "models/v7_grandmaster_full/best/best_model.zip"
+DEFAULT_V8_PATH = "models/v10_15x13_selfplay/best/best_model.zip"
+DEFAULT_V7_PATH = "models/v9_15x13_bots_1500k/best/best_model.zip"
 
 
 def load_model(path: str):

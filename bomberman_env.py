@@ -93,6 +93,8 @@ class BombermanEnv(gym.Env):
         wall_density=65,
         tactical_shield=True,
         use_10_channels=False,
+        use_bfs_channels=False,
+        mask_mode="clean",
         randomize_curriculum=False,
         sudden_death_ticks=None,
         num_ai_opponents=0,
@@ -110,12 +112,19 @@ class BombermanEnv(gym.Env):
         self.frame_skip = frame_skip
         self.tactical_shield = tactical_shield
         self.use_10_channels = use_10_channels
+        self.use_bfs_channels = use_bfs_channels
+        self.mask_mode = mask_mode
         self.randomize_curriculum = randomize_curriculum
         self.sudden_death_ticks = sudden_death_ticks
 
         self.game = bme.Game(self.width, self.height)
         self.action_space = spaces.Discrete(6)
-        self.n_channels = 10 if self.use_10_channels else 19
+        if self.use_10_channels:
+            self.n_channels = 10
+        elif self.use_bfs_channels:
+            self.n_channels = 19
+        else:
+            self.n_channels = 17
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(self.n_channels, self.height, self.width), dtype=np.float32
         )
@@ -145,7 +154,7 @@ class BombermanEnv(gym.Env):
 
     def action_masks(self) -> np.ndarray:
         """Returns boolean action mask [idle, up, down, left, right, bomb] for MaskablePPO."""
-        return compute_action_mask(self._cached_analysis)
+        return compute_action_mask(self._cached_analysis, mode=self.mask_mode)
 
     def _get_ai_opponent_commands(self) -> List[bme.PlayerCommand]:
         """Computes frozen Self-Play PPO + Tactical Shield commands for active AI opponent slots."""
@@ -169,8 +178,9 @@ class BombermanEnv(gym.Env):
                 opp_obs = format_obs(
                     opp_base, opp_reach, opp_bomb, expected_channels=opp_channels
                 )
+                opp_mode = "clean" if opp_channels == 17 else "legacy"
                 with th.no_grad():
-                    opp_mask = compute_action_mask(opp_analysis)
+                    opp_mask = compute_action_mask(opp_analysis, mode=opp_mode)
                     obs_t = th.as_tensor(opp_obs[None], dtype=th.float32)
                     try:
                         dist = opp_model.policy.get_distribution(obs_t, action_masks=opp_mask[None])
@@ -183,7 +193,7 @@ class BombermanEnv(gym.Env):
                         except (TypeError, ValueError):
                             raw_act, _ = opp_model.predict(opp_obs, deterministic=False)
                 exec_act, _ = apply_tactical_shield(
-                    int(raw_act), opp_analysis, rng=self.np_random
+                    int(raw_act), opp_analysis, rng=self.np_random, mode=opp_mode
                 )
             else:
                 exec_act = choose_bfs_fallback_action(opp_analysis, rng=self.np_random)
@@ -208,7 +218,7 @@ class BombermanEnv(gym.Env):
         shield_intervened = False
         if self.tactical_shield:
             exec_action, shield_intervened = apply_tactical_shield(
-                raw_action, analysis, rng=self.np_random
+                raw_action, analysis, rng=self.np_random, mode=self.mask_mode
             )
             if shield_intervened:
                 self.ep_stats["shield_interventions"] += 1
@@ -276,6 +286,8 @@ class BombermanEnv(gym.Env):
         if moved_any:
             self.ep_stats["moves"] += 1
             if post_analysis.get("pos"):
+                if post_analysis["pos"] not in self.visited_tiles:
+                    total_reward += 0.08
                 self.visited_tiles.add(post_analysis["pos"])
         if bomb_placed_any:
             self.ep_stats["bombs_placed"] += 1
@@ -284,12 +296,12 @@ class BombermanEnv(gym.Env):
                 enemy_t = int(analysis.get("enemy_targets_here", 0))
                 compressed_t = int(analysis.get("enemy_space_compressed_here", 0))
                 trap_here = bool(analysis.get("trap_bomb_here", False))
-                total_reward += 0.35 + (1.6 * enemy_t) + (0.40 * min(compressed_t, 6))
+                total_reward += 0.45 + (1.8 * enemy_t) + (0.40 * min(compressed_t, 6))
                 if trap_here:
                     self.ep_stats["traps_created"] += 1
                     total_reward += 3.50
             else:
-                total_reward -= 0.45
+                total_reward -= 0.30
         if bomb_pushed_any:
             self.ep_stats["bombs_pushed"] += 1
             prev_en_safe = int(analysis.get("total_enemy_safe_tiles", 0))
@@ -299,9 +311,10 @@ class BombermanEnv(gym.Env):
                 int(post_analysis.get("trapped_enemies_count", 0))
                 > int(analysis.get("trapped_enemies_count", 0))
             )
+            trapped_emergency = bool(analysis["in_danger"] and int(analysis.get("escape_action", 0)) == exec_action)
             if (
                 exec_action in analysis.get("tactical_push_actions", [])
-                or analysis["in_danger"]
+                or trapped_emergency
                 or push_compressed > 0
                 or newly_trapped
             ):
@@ -310,7 +323,16 @@ class BombermanEnv(gym.Env):
                     self.ep_stats["traps_created"] += 1
                     total_reward += 3.50
             else:
-                total_reward -= 0.1
+                total_reward -= 0.25
+        # Only apply scripted hunt_action step bonus in legacy BFS mode;
+        # in Option B ("clean"), the CNN discovers pathing purely from outcome rewards & potential!
+        if self.mask_mode == "legacy" and not analysis["in_danger"] and moved_any:
+            hunt_act = int(analysis.get("hunt_action", 0))
+            if hunt_act in (1, 2, 3, 4):
+                if exec_action == hunt_act:
+                    total_reward += 0.15
+                else:
+                    total_reward -= 0.06
         if analysis["in_danger"] and not post_analysis["in_danger"] and not died:
             self.ep_stats["successful_dodges"] += 1
 

@@ -23,6 +23,7 @@ ppo_bomberman_v1/
 *.npz
 *.pt
 *.pth
+*.log
 tensorboard/
 logs/
 runs/

@@ -49,8 +49,15 @@ from sb3_contrib.common.maskable.buffers import MaskableRolloutBuffer
 from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import bomberman_engine as bme
-from bomberman_env import BombermanCNN, BombermanEnv, _get_shared_opponent_model
+from rl.bomberman_env import BombermanCNN, BombermanEnv, _get_shared_opponent_model
 
 # Cap PyTorch CPU threads so training never starves the WSL host or VS Code / Antigravity IDE server
 th.set_num_threads(2)
@@ -192,6 +199,8 @@ def make_train_env(
     base_seed: int,
     total_envs: int = 4,
     self_play_model_path: Optional[str] = None,
+    use_bfs_channels: bool = False,
+    mask_mode: str = "clean",
 ) -> Callable[[], Monitor]:
     """Create a seeded worker environment with structured + League Self-Play curriculum diversity."""
     def _init() -> Monitor:
@@ -210,6 +219,8 @@ def make_train_env(
                 num_ai_opponents=1 if has_sp else 0,
                 self_play_model_path=self_play_model_path if has_sp else None,
                 wall_density=45,
+                use_bfs_channels=use_bfs_channels,
+                mask_mode=mask_mode,
                 randomize_curriculum=False,
             )
         elif slot == 1:
@@ -217,6 +228,8 @@ def make_train_env(
                 num_bots=2,
                 num_ai_opponents=0,
                 wall_density=55,
+                use_bfs_channels=use_bfs_channels,
+                mask_mode=mask_mode,
                 randomize_curriculum=False,
             )
         elif slot == 2:
@@ -224,6 +237,8 @@ def make_train_env(
                 num_bots=3,
                 num_ai_opponents=0,
                 wall_density=65,
+                use_bfs_channels=use_bfs_channels,
+                mask_mode=mask_mode,
                 randomize_curriculum=False,
             )
         else:
@@ -232,6 +247,8 @@ def make_train_env(
                 num_ai_opponents=1 if has_sp else 0,
                 self_play_model_path=self_play_model_path if has_sp else None,
                 wall_density=60,
+                use_bfs_channels=use_bfs_channels,
+                mask_mode=mask_mode,
                 randomize_curriculum=True,
             )
         env.reset(seed=worker_seed)
@@ -239,7 +256,12 @@ def make_train_env(
     return _init
 
 
-def make_eval_env(base_seed: int, self_play_model_path: Optional[str] = None) -> Callable[[], Monitor]:
+def make_eval_env(
+    base_seed: int,
+    self_play_model_path: Optional[str] = None,
+    use_bfs_channels: bool = False,
+    mask_mode: str = "clean",
+) -> Callable[[], Monitor]:
     """Create a lightweight in-process evaluation environment against DumbBots."""
     def _init() -> Monitor:
         eval_seed = base_seed + 50000
@@ -248,6 +270,8 @@ def make_eval_env(base_seed: int, self_play_model_path: Optional[str] = None) ->
             num_bots=2,
             num_ai_opponents=0,
             wall_density=55,
+            use_bfs_channels=use_bfs_channels,
+            mask_mode=mask_mode,
             randomize_curriculum=True,
         )
         env.reset(seed=eval_seed)
@@ -298,12 +322,19 @@ def main() -> None:
         action="store_false",
         help="Disable action masking and train with standard PPO.",
     )
+    parser.add_argument(
+        "--legacy-bfs",
+        action="store_true",
+        help="Use legacy 19-channel BFS observations and target-forced action masking (Option C). Default is Option B (17-channel pure C++ CNN + physics/suicide mask).",
+    )
     parser.add_argument("--run-name", type=str, default=None, help="Run directory name under models/.")
     parser.add_argument("--export-gui", action="store_true", default=True, help="Export best/final model to GUI default paths.")
     args = parser.parse_args()
 
+    use_bfs_channels = bool(args.legacy_bfs)
+    mask_mode = "legacy" if args.legacy_bfs else "clean"
     timesteps = 150000 if (args.pilot and args.timesteps == 1500000) else args.timesteps
-    algo_tag = "v8_masked" if args.mask_actions else "v8_unmasked"
+    algo_tag = ("v10_legacy_bfs" if args.legacy_bfs else "v11_clean_cnn") if args.mask_actions else "v11_unmasked_cnn"
     run_name = args.run_name or (f"{algo_tag}_pilot" if args.pilot else f"{algo_tag}_{timesteps // 1000}k")
     run_dir = os.path.join("models", run_name)
     ckpt_dir = os.path.join(run_dir, "checkpoints")
@@ -336,7 +367,14 @@ def main() -> None:
     gc.collect()
 
     env_fns = [
-        make_train_env(i, args.seed, args.n_envs, self_play_model_path=sp_model_path)
+        make_train_env(
+            i,
+            args.seed,
+            args.n_envs,
+            self_play_model_path=sp_model_path,
+            use_bfs_channels=use_bfs_channels,
+            mask_mode=mask_mode,
+        )
         for i in range(args.n_envs)
     ]
     if args.vec_env == "subproc" and args.n_envs > 1:
@@ -346,7 +384,14 @@ def main() -> None:
         env = DummyVecEnv(env_fns)
 
     # Always keep eval_env in-process via DummyVecEnv (1 env) to save ~1.2 GB of idle worker RAM
-    eval_env = DummyVecEnv([make_eval_env(args.seed, self_play_model_path=sp_model_path)])
+    eval_env = DummyVecEnv([
+        make_eval_env(
+            args.seed,
+            self_play_model_path=sp_model_path,
+            use_bfs_channels=use_bfs_channels,
+            mask_mode=mask_mode,
+        )
+    ])
 
     policy_kwargs = dict(
         features_extractor_class=BombermanCNN,

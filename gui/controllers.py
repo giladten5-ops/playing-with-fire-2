@@ -6,7 +6,7 @@ import pygame
 
 from gui.config import BOARD_HEIGHT_TILES, BOARD_WIDTH_TILES, DEFAULT_MODEL_PATHS
 from gui.state_snapshot import AIDebugSnapshot, IGameSession, PlayerAction
-from rl_utils import (
+from rl.rl_utils import (
     DIRS,
     apply_tactical_shield,
     compute_action_mask,
@@ -259,7 +259,7 @@ class PPOAgentController:
     DIRS: Dict[int, Tuple[int, int]] = DIRS
 
     _shared_model: Optional[object] = None
-    _shared_expected_channels: int = 19
+    _shared_expected_channels: int = 17
     _model_load_attempted: bool = False
 
     def __init__(
@@ -270,7 +270,7 @@ class PPOAgentController:
         tactical_shield: bool = True,
         frame_skip: int = 6,
         shared_model: Optional[object] = None,
-        expected_channels: int = 19,
+        expected_channels: int = 17,
         lazy: bool = False,
         model_path: Optional[str] = None,
         temperature: float = 0.2,
@@ -303,7 +303,7 @@ class PPOAgentController:
     def reset_model_cache(cls) -> None:
         """Resets class-level model cache (for testing or explicit reload)."""
         cls._shared_model = None
-        cls._shared_expected_channels = 19
+        cls._shared_expected_channels = 17
         cls._model_load_attempted = False
 
     @staticmethod
@@ -338,7 +338,7 @@ class PPOAgentController:
             if pygame.display.get_init():
                 pygame.event.pump()
             import torch as th
-            from bomberman_env import BombermanCNN
+            from rl.bomberman_env import BombermanCNN
             try:
                 from sb3_contrib import MaskablePPO
                 self.model = MaskablePPO.load(
@@ -386,7 +386,7 @@ class PPOAgentController:
                 pygame.event.pump()
 
             import torch as th
-            from bomberman_env import BombermanCNN
+            from rl.bomberman_env import BombermanCNN
             try:
                 from sb3_contrib import MaskablePPO
                 self.model = MaskablePPO.load(
@@ -498,9 +498,10 @@ class PPOAgentController:
         cur_pos = (int(tstate.get("x", -1)), int(tstate.get("y", -1)))
 
         if self.model is not None:
+            mask_mode = "clean"
             try:
                 import torch as th
-                action_mask = compute_action_mask(analysis)
+                action_mask = compute_action_mask(analysis, mode=mask_mode)
                 obs_tensor, _ = self.model.policy.obs_to_tensor(obs)
                 with th.no_grad():
                     try:
@@ -514,30 +515,8 @@ class PPOAgentController:
                     val = self.model.policy.predict_values(obs_tensor).cpu().numpy()[0]
                     value_est = float(val.item() if hasattr(val, "item") else val[0])
 
-                # Check for 2-cycle oscillation in recent positions (A <-> B <-> A <-> B)
-                is_oscillating = False
-                if len(self._recent_positions) >= 4:
-                    if (
-                        self._recent_positions[-1] == self._recent_positions[-3]
-                        and cur_pos == self._recent_positions[-2]
-                    ):
-                        is_oscillating = True
-
-                if is_oscillating:
-                    hunt_act = int(analysis.get("hunt_action", 0))
-                    if hunt_act != 0 and hunt_act in analysis.get("valid_moves", []):
-                        raw_action = hunt_act
-                    elif self.temperature > 0.0:
-                        p_temp = np.power(probs, 1.0 / max(0.01, self.temperature))
-                        p_sum = np.sum(p_temp)
-                        raw_action = (
-                            int(np.random.choice(len(p_temp), p=p_temp / p_sum))
-                            if p_sum > 0
-                            else int(np.argmax(probs))
-                        )
-                    else:
-                        raw_action = int(np.argmax(probs))
-                elif self.temperature > 0.0:
+                # Option B (Pure CNN Decision Making): never override CNN choices with hunt_action!
+                if self.temperature > 0.0:
                     p_temp = np.power(probs, 1.0 / max(0.01, self.temperature))
                     p_sum = np.sum(p_temp)
                     raw_action = (
@@ -549,7 +528,7 @@ class PPOAgentController:
                     raw_action = int(np.argmax(probs))
             except Exception:
                 try:
-                    action_mask = compute_action_mask(analysis)
+                    action_mask = compute_action_mask(analysis, mode=mask_mode)
                     pred, _ = self.model.predict(
                         obs, action_masks=action_mask, deterministic=(self.temperature == 0.0)
                     )
@@ -576,7 +555,9 @@ class PPOAgentController:
         exec_action = raw_action
         shield_intervened = False
         if self.tactical_shield:
-            exec_action, shield_intervened = apply_tactical_shield(raw_action, analysis)
+            exec_action, shield_intervened = apply_tactical_shield(
+                raw_action, analysis, mode="clean"
+            )
 
         if exec_action == int(PlayerAction.NONE):
             self._idle_cooldown = max(0, self.frame_skip - 1)

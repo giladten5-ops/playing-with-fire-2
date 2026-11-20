@@ -77,8 +77,8 @@ class BombermanGUIApp:
         self.clock = pygame.time.Clock()
 
         self.duel_mode: bool = bool(duel_mode)
-        self.p1_model_path: str = p1_model_path or "models/v8_masked_pilot_v2/best/best_model.zip"
-        self.p2_model_path: str = p2_model_path or "models/v7_grandmaster_full/best/best_model.zip"
+        self.p1_model_path: str = p1_model_path or "models/v10_15x13_selfplay/best/best_model.zip"
+        self.p2_model_path: str = p2_model_path or "models/v9_15x13_bots_1500k/best/best_model.zip"
 
         # Wizard selections dictionary with explicit dumb_bots and trained_ai counts
         self.menu_selections: Dict[str, object] = {

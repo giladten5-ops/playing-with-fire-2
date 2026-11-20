@@ -71,6 +71,7 @@ py::tuple compute_bfs_features_cpp(
         analysis["push_actions"] = py::list();
         analysis["tactical_push_actions"] = py::list();
         analysis["active_bombs_count"] = 0;
+        analysis["local_active_bombs"] = 0;
         analysis["closest_bombing_site"] = py::none();
         return py::make_tuple(reach_arr, bomb_arr, 0.0f, analysis);
     }
@@ -91,6 +92,7 @@ py::tuple compute_bfs_features_cpp(
     std::vector<uint8_t> enemies(hw, 0);
     std::vector<std::pair<int, int>> en_all;
     int active_bombs_count = 0;
+    int local_active_bombs = 0;
 
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
@@ -98,7 +100,12 @@ py::tuple compute_bfs_features_cpp(
             solid[idx] = ch_solid[idx] > 0.0f;
             breakable[idx] = ch_breakable[idx] > 0.0f;
             bombs[idx] = ch_bombs[idx] > 0.0f;
-            if (bombs[idx]) active_bombs_count++;
+            if (bombs[idx]) {
+                active_bombs_count++;
+                if (std::abs(x - px) + std::abs(y - py) <= bomb_radius + 3) {
+                    local_active_bombs++;
+                }
+            }
             flames[idx] = ch_flames[idx] > 0.0f;
             enemies[idx] = ch_enemies[idx] > 0.0f;
             if (enemies[idx]) {
@@ -139,14 +146,23 @@ py::tuple compute_bfs_features_cpp(
         return true;
     };
 
-    auto has_push_target_in_dir = [&](int dx, int dy) -> bool {
-        for (int dist_step = 2; dist_step < 7; ++dist_step) {
-            int tx = px + dx * dist_step;
-            int ty = py + dy * dist_step;
-            if (tx < 0 || tx >= w || ty < 0 || ty >= h) break;
-            int t_idx = ty * w + tx;
-            if (solid[t_idx]) break;
-            if (enemies[t_idx] || breakable[t_idx]) return true;
+    auto has_enemy_push_target_in_dir = [&](int dx, int dy) -> bool {
+        // Check if kicking the adjacent bomb at (px+dx, py+dy) in direction (dx, dy)
+        // slides it toward an enemy (either on the slide line or within blast radius of the slide path)
+        int cur_x = px + dx;
+        int cur_y = py + dy;
+        for (int step = 1; step <= 8; ++step) {
+            int nx = cur_x + dx * step;
+            int ny = cur_y + dy * step;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) break;
+            int n_idx = ny * w + nx;
+            if (solid[n_idx] || breakable[n_idx] || bombs[n_idx]) break;
+            if (enemies[n_idx]) return true;
+            // Also check perpendicular within 2 tiles along the slide path
+            int px1 = nx + dy, py1 = ny + dx;
+            if (px1 >= 0 && px1 < w && py1 >= 0 && py1 < h && enemies[py1 * w + px1]) return true;
+            int px2 = nx - dy, py2 = ny - dx;
+            if (px2 >= 0 && px2 < w && py2 >= 0 && py2 < h && enemies[py2 * w + px2]) return true;
         }
         return false;
     };
@@ -189,7 +205,7 @@ py::tuple compute_bfs_features_cpp(
         q_head++;
         int c_idx = cy * w + cx;
         int d = dist[c_idx];
-        if (d >= 16) continue;
+        if (d >= 26) continue;
 
         for (int dir = 0; dir < 4; ++dir) {
             int act_id = ACT_IDS[dir];
@@ -209,7 +225,7 @@ py::tuple compute_bfs_features_cpp(
                         valid_moves.push_back(act_id);
                     }
                     if (ndanger == 0.0f) {
-                        reach_map[n_idx] = std::max(0.1f, 1.0f - static_cast<float>(d + 1) / 17.0f);
+                        reach_map[n_idx] = std::max(0.1f, 1.0f - static_cast<float>(d + 1) / 26.0f);
                         if (d + 1 < min_safe_dist) {
                             min_safe_dist = d + 1;
                             escape_action = fa;
@@ -228,6 +244,7 @@ py::tuple compute_bfs_features_cpp(
     std::vector<int> push_actions;
     std::vector<int> tactical_push_actions;
     if (has_hammer && !bombs[p_idx]) {
+        bool trapped_without_walk_escape = (in_danger && escape_action == 0);
         for (int dir = 0; dir < 4; ++dir) {
             int act_id = ACT_IDS[dir];
             int dx = DX[dir], dy = DY[dir];
@@ -236,11 +253,11 @@ py::tuple compute_bfs_features_cpp(
                 if (std::find(valid_moves.begin(), valid_moves.end(), act_id) == valid_moves.end()) {
                     valid_moves.push_back(act_id);
                 }
-                if (in_danger || has_push_target_in_dir(dx, dy)) {
+                if (trapped_without_walk_escape || has_enemy_push_target_in_dir(dx, dy)) {
                     tactical_push_actions.push_back(act_id);
                     bomb_map[(py + dy) * w + (px + dx)] = 1.0f;
                 }
-                if (in_danger && escape_action == 0) {
+                if (trapped_without_walk_escape && escape_action == 0) {
                     escape_action = act_id;
                 }
             }
@@ -384,7 +401,7 @@ py::tuple compute_bfs_features_cpp(
 
         bool has_nearby = false;
         for (const auto& ec : enemy_coords) {
-            if (std::abs(ec.first - bx) + std::abs(ec.second - by) <= radius + 3) {
+            if (std::abs(ec.first - bx) + std::abs(ec.second - by) <= radius + 2) {
                 has_nearby = true;
                 break;
             }
@@ -395,7 +412,7 @@ py::tuple compute_bfs_features_cpp(
         for (size_t i = 0; i < enemy_coords.size(); ++i) {
             int ex = enemy_coords[i].first;
             int ey = enemy_coords[i].second;
-            if (std::abs(ex - bx) + std::abs(ey - by) > radius + 3) continue;
+            if (std::abs(ex - bx) + std::abs(ey - by) > radius + 2) continue;
             int before_sc = enemy_base_safe[i];
             int after_sc = count_enemy_safe_tiles(ex, ey, bx, by, bid, 6);
             int diff = std::max(0, before_sc - after_sc);
@@ -403,7 +420,7 @@ py::tuple compute_bfs_features_cpp(
             if (before_sc > 0 && after_sc == 0) {
                 out_traps = true;
                 out_pins = true;
-            } else if (diff >= 2 && after_sc <= 4) {
+            } else if (diff >= 2 && after_sc <= 2) {
                 out_pins = true;
             }
         }
@@ -425,7 +442,9 @@ py::tuple compute_bfs_features_cpp(
                     out_et += 1;
                 }
                 if (breakable[n_idx]) {
-                    out_t += 1;
+                    if (r == 1) {
+                        out_t += 1;
+                    }
                     break;
                 }
             }
@@ -443,24 +462,6 @@ py::tuple compute_bfs_features_cpp(
         } else if (pins_enemy) {
             out_t += std::min(4, out_comp);
             out_et = std::max(out_et, 1);
-        }
-
-        if (out_et == 0 && has_hammer && !en_all.empty()) {
-            for (int dir = 0; dir < 4; ++dir) {
-                int dx = DX[dir], dy = DY[dir];
-                for (int r = 2; r < 7; ++r) {
-                    int nx = bx + dx * r;
-                    int ny = by + dy * r;
-                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) break;
-                    int n_idx = ny * w + nx;
-                    if (solid[n_idx] || breakable[n_idx]) break;
-                    if (enemies[n_idx]) {
-                        out_t += 2;
-                        out_et += 1;
-                        break;
-                    }
-                }
-            }
         }
     };
 
@@ -557,11 +558,13 @@ py::tuple compute_bfs_features_cpp(
     if (!in_danger) {
         if ((enemy_targets_here > 0 || trap_bomb_here) && safe_escape_here) {
             hunt_action = 0;
-        } else if (!enemy_bombing_sites.empty() && enemy_bombing_sites[0].dist <= 6) {
+        } else if (!tactical_push_actions.empty()) {
+            hunt_action = tactical_push_actions[0];
+        } else if (!enemy_bombing_sites.empty() && enemy_bombing_sites[0].dist <= 8) {
             hunt_action = first_action[enemy_bombing_sites[0].by * w + enemy_bombing_sites[0].bx];
         } else if (closest_pu_x >= 0 && closest_pu_d <= 3) {
             hunt_action = first_action[closest_pu_y * w + closest_pu_x];
-        } else if (!reach_en.empty() && std::get<0>(reach_en[0]) <= 8) {
+        } else if (!reach_en.empty()) {
             hunt_action = first_action[std::get<2>(reach_en[0]) * w + std::get<1>(reach_en[0])];
         } else if (!enemy_bombing_sites.empty()) {
             hunt_action = first_action[enemy_bombing_sites[0].by * w + enemy_bombing_sites[0].bx];
@@ -569,8 +572,6 @@ py::tuple compute_bfs_features_cpp(
             hunt_action = 0;
         } else if (!bombing_sites.empty()) {
             hunt_action = first_action[bombing_sites[0].by * w + bombing_sites[0].bx];
-        } else if (!reach_en.empty()) {
-            hunt_action = first_action[std::get<2>(reach_en[0]) * w + std::get<1>(reach_en[0])];
         } else if (closest_pu_x >= 0) {
             hunt_action = first_action[closest_pu_y * w + closest_pu_x];
         } else if (!en_all.empty()) {
@@ -645,6 +646,7 @@ py::tuple compute_bfs_features_cpp(
     analysis["push_actions"] = py::cast(push_actions);
     analysis["tactical_push_actions"] = py::cast(tactical_push_actions);
     analysis["active_bombs_count"] = active_bombs_count;
+    analysis["local_active_bombs"] = local_active_bombs;
     if (!bombing_sites.empty()) {
         const auto& s0 = bombing_sites[0];
         analysis["closest_bombing_site"] = py::make_tuple(

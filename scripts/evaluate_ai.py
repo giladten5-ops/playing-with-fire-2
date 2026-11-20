@@ -28,9 +28,16 @@ import numpy as np
 import torch as th
 from stable_baselines3 import PPO
 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import bomberman_engine as bme
-from bomberman_env import BombermanCNN, BombermanEnv
-from rl_utils import choose_bfs_fallback_action
+from rl.bomberman_env import BombermanCNN, BombermanEnv
+from rl.rl_utils import choose_bfs_fallback_action
 
 th.set_num_threads(1)
 
@@ -106,10 +113,19 @@ def evaluate_scenario(
     deterministic: bool = True,
 ) -> Dict[str, float]:
     """Run n_episodes on a specific scenario and aggregate gameplay metrics."""
+    use_bfs_channels = False
+    mask_mode = "clean"
+    if model is not None:
+        obs_shape = getattr(model.observation_space, "shape", None)
+        if obs_shape and len(obs_shape) == 3 and int(obs_shape[0]) == 19:
+            use_bfs_channels = True
+
     env = BombermanEnv(
         num_bots=scenario["num_bots"],
         wall_density=scenario["wall_density"],
         tactical_shield=tactical_shield,
+        use_bfs_channels=use_bfs_channels,
+        mask_mode=mask_mode,
         randomize_curriculum=False,
         sudden_death_ticks=scenario.get("sudden_death_ticks"),
     )

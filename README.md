@@ -179,26 +179,28 @@ make console
 ### 3. Run the GUI or AI Duel Modes
 ```bash
 # Launch the Pygame GUI (Main Menu wizard)
-./venv/bin/python play_gui.py
+make run
+# or: ./venv/bin/python scripts/play_gui.py
 
 # Launch 1v1 AI Duel in Pygame (requires model checkpoints)
-./venv/bin/python play_gui.py --duel
+make duel
+# or: ./venv/bin/python scripts/play_gui.py --duel
 
 # Spectate an AI Duel in terminal ASCII mode or run a statistical tournament
-./venv/bin/python duel.py --cli --speed 0.05
-./venv/bin/python duel.py --tournament 20
+./venv/bin/python scripts/duel.py --cli --speed 0.05
+./venv/bin/python scripts/duel.py --tournament 20
 ```
 
 ### 4. Train & Evaluate an RL Agent
 ```bash
-# Quick 150k-step pilot run (Masked PPO)
-./venv/bin/python train.py --pilot --mask-actions --run-name my_pilot
+# Quick 150k-step pilot run (Clean 17-channel CNN + Physics/Suicide Masking)
+./venv/bin/python scripts/train.py --pilot --mask-actions --run-name my_pilot
 
 # Full training run with 4 subprocess environments
-./venv/bin/python train.py --timesteps 1500000 --n-envs 4 --vec-env subproc --mask-actions --run-name my_agent
+./venv/bin/python scripts/train.py --timesteps 1500000 --n-envs 4 --vec-env subproc --mask-actions --run-name my_agent
 
 # Evaluate a trained checkpoint across all 6 benchmark scenarios
-./venv/bin/python evaluate_ai.py --model models/my_agent/best/best_model.zip --episodes 20
+./venv/bin/python scripts/evaluate_ai.py --model models/my_agent/best/best_model.zip --episodes 20
 ```
 
 ---
@@ -215,14 +217,18 @@ make console
 │   ├── factories/              # Configurable PowerUpFactory
 │   ├── levels/                 # ClassicLevel procedural map generator
 │   └── systems/                # ExplosionSystem, CollisionSystem, SuddenDeathSystem
+├── rl/                         # Reinforcement Learning core package
+│   ├── bomberman_env.py        # Gymnasium environment & BombermanCNN feature extractor
+│   └── rl_utils.py             # Safety/suicide action masking, PBRS, and legacy BFS support
+├── scripts/                    # CLI & GUI entry-point scripts
+│   ├── play_gui.py             # Pygame GUI launcher
+│   ├── train.py                # MaskablePPO / PPO training pipeline
+│   ├── duel.py                 # 1v1 AI Duel (GUI, CLI ASCII, and tournament modes)
+│   ├── evaluate_ai.py          # Multi-scenario benchmark suite
+│   └── watch.py                # Lightweight terminal spectator
 ├── gui/                        # Decoupled 60 FPS Pygame UI (app, adapter, renderers, controllers)
 ├── tests/                      # Unit & integration tests (test_gui_architecture.py)
-├── bomberman_env.py            # Gymnasium environment & BombermanCNN feature extractor
-├── rl_utils.py                 # BFS reachability, danger analysis, action masking, PBRS
-├── train.py                    # MaskablePPO / PPO training pipeline
-├── evaluate_ai.py              # Multi-scenario benchmark suite
-├── duel.py                     # 1v1 AI Duel (GUI, CLI ASCII, and tournament modes)
-├── play_gui.py                 # Pygame GUI entry point
+├── logs/                       # Training logs
 └── Makefile                    # Build, test, console, and run targets
 ```
 

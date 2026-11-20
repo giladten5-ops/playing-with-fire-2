@@ -1,6 +1,12 @@
-import os, time
+import os, sys, time
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from stable_baselines3 import PPO
-from bomberman_env import BombermanEnv, BombermanCNN
+from rl.bomberman_env import BombermanEnv, BombermanCNN
 
 def render_board(obs):
     channels, height, width = obs.shape

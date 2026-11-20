@@ -75,13 +75,13 @@ $(BUILD_DIR)/%.o: src/%.cpp
 
 # Build (if needed) and launch the Pygame GUI (starts in Main Menu)
 run: $(TARGET_SO)
-	$(PYTHON) play_gui.py
+	$(PYTHON) scripts/play_gui.py
 
 play: run
 
 # Launch Pygame GUI directly in 1v1 AI Duel mode: v8 (Masked PPO) vs v7 (Grandmaster)
 duel: $(TARGET_SO)
-	$(PYTHON) play_gui.py --duel
+	$(PYTHON) scripts/play_gui.py --duel
 
 # Build (if needed) and run the test suite
 test: $(TARGET_SO)
@@ -89,7 +89,7 @@ test: $(TARGET_SO)
 
 # Build (if needed) and run PPO RL training
 train: $(TARGET_SO)
-	$(PYTHON) train.py
+	$(PYTHON) scripts/train.py
 
 # Build standalone terminal/console C++ executable
 console: $(TARGET_BIN)

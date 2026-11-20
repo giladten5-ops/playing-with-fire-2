@@ -517,18 +517,51 @@ def apply_tactical_shield(
     raw_action: int,
     analysis: Dict[str, Any],
     rng: Optional[Any] = None,
+    mode: str = "clean",
 ) -> Tuple[int, bool]:
     """
-    Applies the tactical safety shield to a raw action using BFS analysis.
-    Action 5 is strictly PLACE_BOMB; Hammer bomb pushing is performed via
-    directional movement actions (1..4) in analysis['push_actions'].
+    Applies the safety shield to a raw action.
+    - mode="clean" (Option B — Pure CNN Decision Making + Physics/Suicide Safety Only):
+      Never forces targets, never overrides safe movement directions with `hunt_action`,
+      and never blocks bomb kicks or bomb placements based on heuristic target counts.
+      Only prevents:
+        1. Staying in or walking into imminent explosion danger when a safe escape exists.
+        2. Placing a bomb with zero escape paths (guaranteed self-suicide) or when physically illegal.
+        3. Walking into solid/unpassable walls.
+    - mode="legacy" (Option C — Legacy BFS Heuristic Guided Shield):
+      Preserves previous behavior for backward compatibility with older checkpoints.
     Returns (executed_action, shield_intervened).
     """
     exec_action = int(raw_action)
     shield_intervened = False
     valid_moves: List[int] = list(analysis["valid_moves"])
+    push_actions: List[int] = list(analysis.get("push_actions", []))
     tactical_pushes: List[int] = list(analysis.get("tactical_push_actions", []))
+    hunt_act = int(analysis.get("hunt_action", 0))
     choice_fn = rng.choice if rng is not None else np.random.choice
+
+    if mode != "legacy":
+        in_danger = bool(analysis.get("in_danger", False))
+        escape_act = int(analysis.get("escape_action", 0))
+        if in_danger and escape_act != 0 and (
+            exec_action == 0
+            or exec_action == 5
+            or exec_action not in valid_moves
+        ):
+            exec_action = escape_act
+            shield_intervened = True
+        elif exec_action == 5 and (
+            not analysis.get("can_place_bomb", False)
+            or not analysis.get("safe_escape_from_here", False)
+        ):
+            nz = [m for m in valid_moves if m != 0]
+            exec_action = int(choice_fn(nz)) if nz else 0
+            shield_intervened = True
+        elif exec_action in (1, 2, 3, 4) and exec_action not in valid_moves:
+            nz = [m for m in valid_moves if m != 0]
+            exec_action = int(choice_fn(nz)) if nz else 0
+            shield_intervened = True
+        return exec_action, shield_intervened
 
     if analysis["in_danger"] and int(analysis["escape_action"]) != 0 and (
         exec_action == 0
@@ -545,13 +578,26 @@ def apply_tactical_shield(
     ):
         if tactical_pushes:
             exec_action = int(tactical_pushes[0])
+        elif hunt_act in valid_moves and hunt_act != 0 and hunt_act not in push_actions:
+            exec_action = hunt_act
         else:
-            nz = [m for m in valid_moves if m != 0]
+            nz = [m for m in valid_moves if m != 0 and (m not in push_actions or m in tactical_pushes)]
+            exec_action = int(choice_fn(nz)) if nz else 0
+        shield_intervened = True
+    elif exec_action in push_actions and exec_action not in tactical_pushes:
+        # Block pointless bomb pushes into empty space; redirect toward hunt objective
+        if hunt_act in valid_moves and hunt_act != 0 and (hunt_act not in push_actions or hunt_act in tactical_pushes):
+            exec_action = hunt_act
+        else:
+            nz = [m for m in valid_moves if m != 0 and (m not in push_actions or m in tactical_pushes)]
             exec_action = int(choice_fn(nz)) if nz else 0
         shield_intervened = True
     elif exec_action in (1, 2, 3, 4) and exec_action not in valid_moves:
-        nz = [m for m in valid_moves if m != 0]
-        exec_action = int(choice_fn(nz)) if nz else 0
+        if hunt_act in valid_moves and hunt_act != 0:
+            exec_action = hunt_act
+        else:
+            nz = [m for m in valid_moves if m != 0 and (m not in push_actions or m in tactical_pushes)]
+            exec_action = int(choice_fn(nz)) if nz else 0
         shield_intervened = True
 
     return exec_action, shield_intervened
@@ -579,10 +625,23 @@ def choose_bfs_fallback_action(analysis: Dict[str, Any], rng: Optional[Any] = No
     return int(choice_fn(non_zero)) if non_zero else 0
 
 
-def compute_action_mask(analysis: Optional[Dict[str, Any]]) -> np.ndarray:
+def compute_action_mask(
+    analysis: Optional[Dict[str, Any]],
+    mode: str = "clean",
+) -> np.ndarray:
     """Computes a boolean action mask [can_idle, can_up, can_down, can_left, can_right, can_bomb]
+    used by MaskablePPO.
 
-    used by MaskablePPO to natively prevent invalid, suicidal, or blocked actions.
+    - mode="clean" (Option B — Pure CNN Decision Making + Physics & Suicide Masking Only):
+      The CNN makes 100% of tactical and strategic decisions (where to walk, who to chase,
+      when to place a bomb, when to kick a bomb, when to wait).
+      The mask ONLY blocks physically invalid moves (walls/flames) and guaranteed self-suicide:
+        * Moves 1..4: any passable safe step (or valid Hammer bomb kick) in `valid_moves`.
+        * Action 5 (PLACE_BOMB): allowed whenever off cooldown and at least one escape route exists (`safe_escape_from_here`).
+        * Action 0 (NONE): allowed whenever not standing on an active danger tile (or if no escape exists).
+        * When `in_danger`: any safe step in `valid_moves` is allowed (or `escape_action` if deeper escape is needed).
+    - mode="legacy" (Option C — Legacy Heavy BFS Heuristic Mask):
+      Preserves previous target-forcing mask for legacy comparisons if explicitly requested.
     """
     mask = np.zeros(6, dtype=bool)
     if analysis is None:
@@ -593,45 +652,111 @@ def compute_action_mask(analysis: Optional[Dict[str, Any]]) -> np.ndarray:
     escape_act = int(analysis.get("escape_action", 0))
     valid_moves = set(analysis.get("valid_moves", [0]))
 
+    if mode != "legacy":
+        if in_danger:
+            # Allow any passable non-lethal directional step out of danger
+            for a in (1, 2, 3, 4):
+                if a in valid_moves:
+                    mask[a] = True
+            if escape_act in (1, 2, 3, 4):
+                mask[escape_act] = True
+            if not np.any(mask):
+                mask[0] = True
+            return mask
+
+        # Not in danger: allow ALL physically passable moves (including valid Hammer pushes)
+        for a in (1, 2, 3, 4):
+            if a in valid_moves:
+                mask[a] = True
+
+        # Allow idle (standing still) when safe
+        mask[0] = True
+
+        # Allow placing a bomb whenever physically legal and not guaranteed suicide
+        mask[5] = bool(analysis.get("can_place_bomb", False)) and bool(
+            analysis.get("safe_escape_from_here", False)
+        )
+
+        if not np.any(mask):
+            mask[0] = True
+        return mask
+
+    push_set = set(analysis.get("push_actions", []))
+    tactical_push_set = set(analysis.get("tactical_push_actions", []))
+    hunt_act = int(analysis.get("hunt_action", 0))
+    local_bombs = int(analysis.get("local_active_bombs", analysis.get("active_bombs_count", 0)))
+
     if in_danger and escape_act in (1, 2, 3, 4):
-        # When in imminent explosion danger, ONLY escape actions or tactical bomb pushes are legal!
-        # Walking into walls, into other blast corridors, or standing still on a ticking bomb is suicidal.
         mask[escape_act] = True
-        for tp in analysis.get("tactical_push_actions", []):
+        for tp in tactical_push_set:
             if tp in (1, 2, 3, 4):
                 mask[tp] = True
         return mask
 
-    # Directional moves (1..4): valid if passable or valid Hammer push
-    for a in (1, 2, 3, 4):
-        mask[a] = a in valid_moves
-
-    # Action 5 (PLACE_BOMB): allowed only when safe, on board, off cooldown, and targets exist
     can_bomb = (
         (not in_danger)
         and bool(analysis.get("can_place_bomb", False))
         and bool(analysis.get("safe_escape_from_here", False))
         and int(analysis.get("bomb_targets_here", 0)) > 0
     )
+    enemy_strike_ready = can_bomb and (
+        int(analysis.get("enemy_targets_here", 0)) > 0
+        or bool(analysis.get("trap_bomb_here", False))
+    )
+
+    if enemy_strike_ready:
+        mask[5] = True
+        for tp in tactical_push_set:
+            if tp in (1, 2, 3, 4):
+                mask[tp] = True
+        return mask
+
+    if not in_danger and tactical_push_set:
+        for tp in tactical_push_set:
+            if tp in (1, 2, 3, 4):
+                mask[tp] = True
+        if can_bomb:
+            mask[5] = True
+        return mask
+
+    if can_bomb and hunt_act == 0 and local_bombs == 0:
+        mask[5] = True
+        return mask
+
+    if not in_danger and local_bombs > 0 and not can_bomb:
+        mask[0] = True
+        if hunt_act in (1, 2, 3, 4) and hunt_act in valid_moves and hunt_act not in push_set:
+            mask[hunt_act] = True
+        return mask
+
+    if (
+        not in_danger
+        and not can_bomb
+        and hunt_act in (1, 2, 3, 4)
+        and hunt_act in valid_moves
+        and (hunt_act not in push_set or hunt_act in tactical_push_set)
+    ):
+        mask[hunt_act] = True
+        return mask
+
+    for a in (1, 2, 3, 4):
+        if a in push_set:
+            mask[a] = a in tactical_push_set
+        else:
+            mask[a] = a in valid_moves
+
     mask[5] = can_bomb
 
-    # Action 0 (NONE / stay still):
-    # If open directional moves exist, disallow idle unless the agent is safely
-    # waiting out an active bomb explosion on the board.
-    # If completely boxed in (no directional moves), idle is permitted as fallback.
     has_directional_moves = any(mask[1:5])
-    active_bombs = int(analysis.get("active_bombs_count", 0))
     if has_directional_moves:
-        mask[0] = (not in_danger) and (active_bombs > 0)
+        mask[0] = (not in_danger) and (local_bombs > 0)
     else:
         mask[0] = not in_danger
 
-    # Safety guarantee: at least one action must always be legal
     if not np.any(mask):
         if escape_act in (1, 2, 3, 4):
             mask[escape_act] = True
         elif has_directional_moves:
-            # Pick first valid directional move
             for a in (1, 2, 3, 4):
                 if a in valid_moves:
                     mask[a] = True
@@ -646,9 +771,14 @@ def format_obs(
     base_obs: np.ndarray,
     reach_map: np.ndarray,
     bomb_map: np.ndarray,
-    expected_channels: int = 19,
+    expected_channels: int = 17,
 ) -> np.ndarray:
-    """Formats the multi-channel observation tensor for 8, 10, 12, or 19 channel policies."""
+    """Formats the multi-channel observation tensor for 8, 10, 12, 17 (Pure C++ CNN), or 19 (Legacy BFS) channel policies."""
+    if expected_channels == 17:
+        if base_obs.shape[0] < 17:
+            pad = np.zeros((17 - base_obs.shape[0], base_obs.shape[1], base_obs.shape[2]), dtype=base_obs.dtype)
+            base_obs = np.concatenate([base_obs, pad], axis=0)
+        return base_obs[:17]
     if expected_channels == 19:
         if base_obs.shape[0] < 17:
             pad = np.zeros((17 - base_obs.shape[0], base_obs.shape[1], base_obs.shape[2]), dtype=base_obs.dtype)
