@@ -670,7 +670,7 @@ class TestGUIArchitecture(unittest.TestCase):
         state_sd = np.asarray(game.getState(1), dtype=np.float32).reshape(-1, 13, 13)
         self.assertGreater(state_sd[3, 0, 0], 0.5, "Imminent Sudden Death spiral tile (0,0) must have high urgency in Channel 3")
 
-        # 4. Non-lethal enemy hit reward (+10) vs fatal enemy kill reward (+10 hit + 20 kill)
+        # 4. Non-lethal enemy hit reward (+6.0 - 0.003 tick tax) vs fatal enemy kill reward (+6.0 hit + 12.0 kill)
         game_hit = bme.Game(13, 13)
         game_hit.clearBoard()
         game_hit.addPlayer(1, 1, 1, False)
@@ -679,7 +679,7 @@ class TestGUIArchitecture(unittest.TestCase):
         res_hit = game_hit.step(1, bme.Command.NONE)
         self.assertEqual(res_hit.enemiesHit, 1)
         self.assertEqual(res_hit.enemiesKilled, 0)
-        self.assertGreaterEqual(res_hit.reward, 9.9, "Non-lethal enemy hit must grant +10.0 reward")
+        self.assertAlmostEqual(res_hit.reward, 6.0 - 0.003, places=3, msg="Non-lethal enemy hit must grant +6.0 - 0.003 tick reward")
 
         # 5. Cooldown-aware BombermanEnv stepping with Speed PowerUps
         env = BombermanEnv(num_bots=1, wall_density=0)
@@ -940,6 +940,400 @@ class TestGUIArchitecture(unittest.TestCase):
         state_agg = np.asarray(ai_game.getState(1), dtype=np.float32)
         _, _, phi_at_5, agg_analysis = compute_bfs_features(state_agg, ai_game.getPlayerInfo(1), 15, 13)
         self.assertEqual(agg_analysis["hunt_action"], 4, "AI must advance RIGHT (4) toward the enemy rather than farming the wall to the LEFT (3)")
+
+    def test_reward_attribution_and_worst_case_losing_bounds(self) -> None:
+        """Verify exact C++ reward attribution (single-credit per hit/kill/wall/life) and worst-case losing trajectory bounds."""
+        import bomberman_engine as bme
+        from rl.bomberman_env import BombermanEnv
+
+        # 1. Exact C++ single-credit hit, lethal kill, wall, and self-life/death rewards
+        game = bme.Game(15, 13)
+        game.clearBoard()
+        game.addPlayer(1, 3, 1, False)  # Safe from bomb at (2, 1)
+        game.addPlayer(5, 5, 2, False)
+        game.addPlayer(13, 11, 3, False)
+
+        # Wall destruction: +0.20 once (not repeated on remaining flame ticks)
+        game.addBreakableWall(3, 1)
+        game.addBomb(2, 1, 1, 2, 1)
+        res_wall = game.step(1, bme.Command.NONE)
+        self.assertEqual(res_wall.wallsDestroyed, 1)
+        self.assertAlmostEqual(res_wall.reward, 0.20 - 0.003, places=4)
+        res_after = game.step(1, bme.Command.NONE)
+        self.assertEqual(res_after.wallsDestroyed, 0)
+        self.assertAlmostEqual(res_after.reward, -0.003, places=4)
+
+        # Enemy hits 1 & 2 (+6.0 each), then lethal 3rd hit (+6.0 hit + 12.0 kill = +18.0)
+        for hit_idx in range(3):
+            game.addBomb(4, 5, 1, 2, 1)
+            res_h = game.step(1, bme.Command.NONE)
+            self.assertEqual(res_h.enemiesHit, 1)
+            if hit_idx < 2:
+                self.assertEqual(res_h.enemiesKilled, 0)
+                self.assertAlmostEqual(res_h.reward, 6.0 - 0.003, places=4)
+                for _ in range(62):
+                    game.step(1, bme.Command.NONE)
+            else:
+                self.assertEqual(res_h.enemiesKilled, 1)
+                self.assertAlmostEqual(res_h.reward, 6.0 + 12.0 - 0.003, places=4)
+
+        # Self lives lost: -6.0 for lives 1 & 2, and -6.0 - 72.0 = -78.0 on final lethal hit (-90.0 total)
+        game.clearBoard()
+        game.addPlayer(5, 5, 1, False)
+        game.addPlayer(13, 11, 2, False)
+        total_self_loss = 0.0
+        for self_hit_idx in range(3):
+            game.addBomb(6, 5, 1, 2, 2)
+            res_s = game.step(1, bme.Command.NONE)
+            self.assertEqual(res_s.livesLost, 1)
+            total_self_loss += res_s.reward + 0.003
+            if self_hit_idx < 2:
+                self.assertFalse(res_s.died)
+                self.assertAlmostEqual(res_s.reward, -6.0 - 0.003, places=4)
+                for _ in range(62):
+                    game.step(1, bme.Command.NONE)
+            else:
+                self.assertTrue(res_s.died)
+                self.assertAlmostEqual(res_s.reward, -6.0 - 72.0 - 0.003, places=4)
+        self.assertAlmostEqual(total_self_loss, -90.0, places=3)
+
+        # 2. Timeout penalty invariance across lives_lost in {0, 1, 2}: total life-loss + terminal == -90.0
+        for lives_to_lose in (0, 1, 2):
+            env = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=140, sudden_death_ticks=5000, tactical_shield=False)
+            env.reset(seed=10 + lives_to_lose)
+            env.game.clearBoard()
+            env.game.addPlayer(1, 1, 1, False)
+            env.game.addPlayer(13, 11, 2, False)
+            env._cached_analysis = None
+            for _ in range(lives_to_lose):
+                env.game.addBomb(2, 1, 1, 2, 2)
+                env.step(0)
+                while env.game.getPlayerInfo(1).invincibilityTimer > 0:
+                    env.step(0)
+            term = False
+            while not term:
+                _, _, term, trunc, info = env.step(0)
+                self.assertFalse(trunc)
+            self.assertTrue(info["match_timeout"])
+            self.assertEqual(env.ep_stats["lives_lost"], lives_to_lose)
+            # rew_combat holds -6 * lives_lost; rew_term holds -(90 - 6 * lives_lost) -> sum == -90.0
+            self.assertAlmostEqual(env.ep_stats["rew_combat"] + env.ep_stats["rew_term"], -90.0, places=4)
+
+        # 3. Verify worst-case losing trajectory arithmetic for 1v1, 1v2, and 1v3 are strictly negative
+        def compute_loss_return(hits: int, kills: int, walls: int, pus: int, ticks: int) -> float:
+            return hits * 6.0 + kills * 12.0 + walls * 0.20 + pus * 0.80 - 90.0 - 0.003 * ticks
+
+        self.assertLess(compute_loss_return(2, 0, 25, 5, 1800), 0.0)   # 1v1 max non-win loss
+        self.assertLess(compute_loss_return(5, 1, 25, 5, 2400), 0.0)   # 1v2 max non-win loss
+        self.assertLess(compute_loss_return(8, 2, 25, 5, 3000), 0.0)   # 1v3 max non-win loss
+
+    def test_standard_pbrs_telescoping_and_terminal_invariants(self) -> None:
+        """Verify exact discounted PBRS telescoping identity across ordinary paths, closed loops, enemy deaths, and terminal states."""
+        from rl.bomberman_env import BombermanEnv
+
+        gamma = 0.995
+        # 1. Ordinary path + closed loop (RIGHT, DOWN, LEFT, UP back to start)
+        env = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=3600, sudden_death_ticks=5000, gamma=gamma)
+        env.reset(seed=7)
+        env.game.clearBoard()
+        env.game.addPlayer(2, 2, 1, False)
+        env.game.addPlayer(10, 10, 2, False)
+        base0 = np.asarray(env.game.getState(1), dtype=np.float32).reshape(-1, 13, 15)
+        _, _, phi0, a0 = env._compute_bfs_features(base0)
+        env._cached_potential = phi0
+        env._cached_analysis = a0
+
+        loop_actions = [4, 2, 3, 1]  # RIGHT -> DOWN -> LEFT -> UP returns to (2, 2)
+        discounted_sum = 0.0
+        for t, act in enumerate(loop_actions):
+            _, _, term, trunc, info = env.step(act)
+            self.assertFalse(term or trunc)
+            discounted_sum += (gamma ** t) * info["pbrs_reward"]
+        phi_end = env._cached_potential
+        self.assertAlmostEqual(phi_end, phi0, places=6, msg="Closed loop must return to exact starting potential")
+        expected_cycle = ((gamma ** len(loop_actions)) - 1.0) * phi0
+        self.assertAlmostEqual(discounted_sum, expected_cycle, places=6)
+
+        # 2. Enemy elimination transition (non-terminal in 1v2): F(s, s') == gamma * Phi(s') - Phi(s) with no re-anchoring skip
+        env.reset(seed=8)
+        env.game.clearBoard()
+        env.game.addPlayer(2, 2, 1, False)
+        env.game.addPlayer(4, 2, 2, False)   # Nearby enemy (d=2)
+        env.game.addPlayer(12, 10, 3, False) # Far enemy (d=18)
+        # Drop Enemy 2 to 1 HP so next bomb kills them
+        for _ in range(2):
+            env.game.addBomb(5, 2, 1, 2, 1)
+            env.game.step(1, env.action_mapping[0])
+            for _ in range(62):
+                env.game.step(1, env.action_mapping[0])
+        base_pre = np.asarray(env.game.getState(1), dtype=np.float32).reshape(-1, 13, 15)
+        _, _, phi_pre, a_pre = env._compute_bfs_features(base_pre)
+        env._cached_potential = phi_pre
+        env._cached_analysis = a_pre
+        env.game.addBomb(5, 2, 1, 2, 1)
+        _, _, term_kill, _, info_kill = env.step(0)
+        self.assertFalse(term_kill)
+        self.assertAlmostEqual(
+            info_kill["pbrs_reward"],
+            gamma * info_kill["phi_next"] - info_kill["phi_prev"],
+            places=6,
+            msg="Enemy elimination transition must obey exact standard PBRS formula",
+        )
+
+        # 3. Terminal timeout: terminated=True, truncated=False, Phi(s_T)=0.0, exact telescoping sum == -Phi(s_0)
+        env_to = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=40, sudden_death_ticks=5000, gamma=gamma)
+        env_to.reset(seed=9)
+        env_to.game.clearBoard()
+        env_to.game.addPlayer(2, 2, 1, False)
+        env_to.game.addPlayer(10, 10, 2, False)
+        base_t0 = np.asarray(env_to.game.getState(1), dtype=np.float32).reshape(-1, 13, 15)
+        _, _, phi_t0, a_t0 = env_to._compute_bfs_features(base_t0)
+        env_to._cached_potential = phi_t0
+        env_to._cached_analysis = a_t0
+
+        disc_sum_to = 0.0
+        t_idx = 0
+        term = False
+        while not term:
+            _, _, term, trunc, info = env_to.step(0)
+            disc_sum_to += (gamma ** t_idx) * info["pbrs_reward"]
+            t_idx += 1
+        self.assertTrue(term and not trunc)
+        self.assertEqual(info["phi_next"], 0.0)
+        self.assertAlmostEqual(disc_sum_to, -phi_t0, places=6)
+
+        # 4. Terminal win: Phi(s_T) == 0.0, exact telescoping sum == -Phi(s_0)
+        env_win = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=500, sudden_death_ticks=5000, gamma=gamma)
+        env_win.reset(seed=10)
+        env_win.game.clearBoard()
+        env_win.game.addPlayer(2, 2, 1, False)
+        env_win.game.addPlayer(6, 2, 2, False)
+        for _ in range(2):
+            env_win.game.addBomb(7, 2, 1, 2, 1)
+            env_win.game.step(1, env_win.action_mapping[0])
+            for _ in range(62):
+                env_win.game.step(1, env_win.action_mapping[0])
+        base_w0 = np.asarray(env_win.game.getState(1), dtype=np.float32).reshape(-1, 13, 15)
+        _, _, phi_w0, a_w0 = env_win._compute_bfs_features(base_w0)
+        env_win._cached_potential = phi_w0
+        env_win._cached_analysis = a_w0
+        env_win.game.addBomb(7, 2, 1, 2, 1)
+        _, _, term_w, trunc_w, info_w = env_win.step(0)
+        self.assertTrue(term_w and not trunc_w)
+        self.assertEqual(info_w["phi_next"], 0.0)
+        self.assertAlmostEqual(info_w["pbrs_reward"], -phi_w0, places=6)
+
+    def test_hypothetical_bomb_blast_ray_and_chain_escape_timing(self) -> None:
+        """Verify fuse-aware escape moves, distance-r crate targets, L-corner suicide blocking, and chained hypothetical bomb timing."""
+        import bomberman_engine as bme
+        from rl.rl_utils import compute_action_mask, compute_bfs_features
+
+        # 1. Crate target detection at distance r=2 (radius=2) AND L-corner suicide blocking at (1,1)
+        game = bme.Game(15, 13)
+        game.clearBoard()
+        for x in range(15):
+            game.setSolidWall(x, 0, True)
+            game.setSolidWall(x, 12, True)
+        for y in range(13):
+            game.setSolidWall(0, y, True)
+            game.setSolidWall(14, y, True)
+        game.setSolidWall(2, 2, True)
+        game.addBreakableWall(3, 1)
+        game.addBreakableWall(1, 3)
+        game.addPlayer(1, 1, 1, False)
+        game.addPlayer(13, 11, 2, False)
+
+        # At L-corner (1,1) with crates at (3,1) and (1,3), bomb radius 2 covers all 3 L-tiles -> NO escape!
+        st_corner = np.asarray(game.getState(1), dtype=np.float32)
+        _, _, _, an_corner = compute_bfs_features(st_corner, game.getPlayerInfo(1), 15, 13)
+        self.assertFalse(an_corner["safe_escape_from_here"], "Bomb at closed L-corner (1,1) must be detected as suicide")
+        self.assertFalse(bool(compute_action_mask(an_corner, mode="clean")[5]))
+
+        # Move to (2,1) with crate at distance r=2 -> (4,1): safe escape exists at (1,2) AND crate at r=2 counts as target!
+        game.clearBoard()
+        for x in range(15):
+            game.setSolidWall(x, 0, True)
+            game.setSolidWall(x, 12, True)
+        for y in range(13):
+            game.setSolidWall(0, y, True)
+            game.setSolidWall(14, y, True)
+        game.setSolidWall(2, 2, True)
+        game.addBreakableWall(4, 1)  # r = 2 from (2, 1)
+        game.addPlayer(2, 1, 1, False)
+        game.addPlayer(13, 11, 2, False)
+        st_r2 = np.asarray(game.getState(1), dtype=np.float32)
+        _, _, _, an_r2 = compute_bfs_features(st_r2, game.getPlayerInfo(1), 15, 13)
+        self.assertTrue(an_r2["safe_escape_from_here"])
+        self.assertGreaterEqual(an_r2["bomb_targets_here"], 1, "Crate at distance r=2 within radius=2 must count as bomb target")
+        self.assertTrue(bool(compute_action_mask(an_r2, mode="clean")[5]))
+
+        # 2. Chain-reaction shortened fuse on hypothetical bomb:
+        # Existing bomb at (4, 5) with timer=10 ticks (radius 2) hits (6, 5).
+        # Corridor along y=5 is boxed by solid walls on y=4 and y=6 except exit at (9, 4) (distance 3 from (6,5)).
+        # If player at (6, 5) places a hypothetical bomb, it chains at T_hyp=10 ticks; at move_cd=6, 3 steps takes >10 ticks -> UNSAFE!
+        game.clearBoard()
+        for x in range(3, 11):
+            game.setSolidWall(x, 4, True)
+            game.setSolidWall(x, 6, True)
+        game.setSolidWall(9, 4, False)  # Only safe exit is 3 tiles right + 1 up = 4 steps
+        game.addPlayer(6, 5, 1, False)
+        game.addPlayer(13, 11, 2, False)
+        game.addBomb(4, 5, 10, 2, 2)  # Chains to (6, 5) in 10 ticks
+        st_chain = np.asarray(game.getState(1), dtype=np.float32)
+        _, _, _, an_chain = compute_bfs_features(st_chain, game.getPlayerInfo(1), 15, 13)
+        self.assertFalse(an_chain["safe_escape_from_here"], "Chained hypothetical bomb with 10-tick fuse must reject 4-step escape")
+
+        # 3. Overlapping blast zones with fuse timing:
+        # Player at (5, 5) (Speed 0, move_cd=6) stands on a bomb at (5, 5) with timer=12 ticks (radius 2).
+        # DOWN path: (5, 6) in blast -> (4, 6) safe (2 steps -> arrives Tick 7 < 12 -> SURVIVABLE!).
+        # RIGHT path: walled on y=4 and y=6 at x=6,7 so must walk 3 steps (6,5)->(7,5)->(8,5) (arrives Tick 13 > 12 -> LETHAL!).
+        game.clearBoard()
+        game.setSolidWall(5, 4, True)
+        game.setSolidWall(4, 5, True)
+        game.setSolidWall(6, 4, True)
+        game.setSolidWall(7, 4, True)
+        game.setSolidWall(6, 6, True)
+        game.setSolidWall(7, 6, True)
+        game.addPlayer(5, 5, 1, False)
+        game.addPlayer(13, 11, 2, False)
+        game.addBomb(5, 5, 12, 2, 1)
+        st_esc = np.asarray(game.getState(1), dtype=np.float32)
+        _, _, _, an_esc = compute_bfs_features(st_esc, game.getPlayerInfo(1), 15, 13)
+        mask_esc = compute_action_mask(an_esc, mode="clean")
+        self.assertIn(2, an_esc["safe_escape_moves"], "DOWN (2 steps, 7 ticks < 12) must be in safe_escape_moves")
+        self.assertNotIn(4, an_esc["safe_escape_moves"], "RIGHT (3 steps, 13 ticks > 12) must NOT be in safe_escape_moves")
+        self.assertTrue(bool(mask_esc[2]))
+        self.assertFalse(bool(mask_esc[4]))
+
+        # Verify stepping DOWN then LEFT actually survives the 12-tick bomb in C++ engine
+        game.step(1, bme.Command.DOWN)   # Tick 1: moves to (5,6), cd=6, timer=11
+        for _ in range(5):
+            game.step(1, bme.Command.NONE)  # Ticks 2..6: cd 5..1, timer 10..6
+        game.step(1, bme.Command.LEFT)   # Tick 7: moves to (4,6) SAFE!
+        for _ in range(10):
+            game.step(1, bme.Command.NONE)
+        p_surv = game.getPlayerInfo(1)
+        self.assertTrue(p_surv.isAlive and p_surv.lives == 3, "Executing unmasked DOWN escape must survive explosion in C++")
+
+    def test_tick_budget_clamping_and_tick_proportional_penalties(self) -> None:
+        """Verify max_match_ticks exact clamping (zero overshoot), uniform tick-proportional time tax, and stagnation window."""
+        from rl.bomberman_env import BombermanEnv
+
+        # 1. Two action distributions (pure idle vs. walking moves) must end at exact tick 120 with identical time tax
+        totals = []
+        for action_seq in ([0], [4, 3]):
+            env = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=120, sudden_death_ticks=5000, tactical_shield=False)
+            env.reset(seed=21)
+            env.game.clearBoard()
+            env.game.addPlayer(5, 5, 1, False)
+            env.game.addPlayer(13, 11, 2, False)
+            env._cached_analysis = None
+            idx = 0
+            term = False
+            while not term:
+                _, _, term, trunc, info = env.step(action_seq[idx % len(action_seq)])
+                idx += 1
+                self.assertFalse(trunc)
+            self.assertEqual(env.ep_stats["ticks"], 120, "Episode must stop at exact max_match_ticks with zero overshoot")
+            self.assertAlmostEqual(env.ep_stats["rew_time"], -0.003 * 120, places=5)
+            totals.append(env.ep_stats["rew_stagnation"])
+        # Both pure-idle and 2-tile oscillation in open space must incur negative stagnation penalty
+        self.assertLess(totals[0], 0.0, "Pure idling in open space must incur stagnation penalty")
+        self.assertLess(totals[1], 0.0, "2-tile oscillation in open space must incur stagnation penalty")
+
+        # 2. Legitimate defensive wait (local active bomb present) must incur ZERO stagnation penalty
+        env_def = BombermanEnv(num_bots=1, wall_density=0, max_match_ticks=200, sudden_death_ticks=5000, tactical_shield=False)
+        env_def.reset(seed=22)
+        env_def.game.clearBoard()
+        env_def.game.addPlayer(5, 5, 1, False)
+        env_def.game.addPlayer(13, 11, 2, False)
+        env_def.game.addBomb(7, 5, 85, 2, 2)  # Local active bomb nearby (dist=2 <= radius+3)
+        env_def._cached_analysis = None
+        for _ in range(18):
+            env_def.step(0)
+        self.assertEqual(env_def.ep_stats["rew_stagnation"], 0.0, "Waiting safely near a local active bomb must not be penalized")
+
+    def test_observation_channel_6_and_7_hp_invincibility_cooldown_encoding(self) -> None:
+        """Verify Channel 6 preserves (HP, Invincibility, Cooldown) and Channel 7 preserves (HP, Invincibility)."""
+        import bomberman_engine as bme
+
+        game = bme.Game(15, 13)
+        game.clearBoard()
+        game.addPlayer(2, 2, 1, False)
+        game.addPlayer(8, 5, 2, False)
+
+        # 3 HP, vulnerable, off cooldown
+        s = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s[6, 2, 2]), 1.00, places=5)
+        self.assertAlmostEqual(float(s[7, 5, 8]), 1.00, places=5)
+
+        # Move P1 RIGHT -> 3 HP, vulnerable, ON cooldown (0.95)
+        game.step(1, bme.Command.RIGHT)
+        s_cd = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_cd[6, 2, 3]), 0.95, places=5)
+
+        # Wait off cooldown, then hit P1 and P2 once -> 2 HP, invincible
+        for _ in range(6):
+            game.step(1, bme.Command.NONE)
+        game.addBomb(4, 2, 1, 2, 2)  # Hits P1 at (3, 2)
+        game.addBomb(9, 5, 1, 2, 1)  # Hits P2 at (8, 5)
+        game.step(1, bme.Command.NONE)
+        s_2inv = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_2inv[6, 2, 3]), 0.55, places=5)
+        self.assertAlmostEqual(float(s_2inv[7, 5, 8]), 0.30, places=5)
+
+        # Move P1 LEFT while invincible -> 2 HP, invincible, ON cooldown (0.50)
+        game.step(1, bme.Command.LEFT)
+        s_2inv_cd = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_2inv_cd[6, 2, 2]), 0.50, places=5)
+
+        # Wait out invincibility (60 ticks) -> 2 HP, vulnerable, off cooldown
+        for _ in range(62):
+            game.step(1, bme.Command.NONE)
+        s_2vul = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_2vul[6, 2, 2]), 0.85, places=5)
+        self.assertAlmostEqual(float(s_2vul[7, 5, 8]), 0.75, places=5)
+
+        # Hit both a 2nd time -> 1 HP, invincible
+        game.addBomb(3, 2, 1, 2, 2)
+        game.addBomb(9, 5, 1, 2, 1)
+        game.step(1, bme.Command.NONE)
+        s_1inv = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_1inv[6, 2, 2]), 0.40, places=5)
+        self.assertAlmostEqual(float(s_1inv[7, 5, 8]), 0.15, places=5)
+
+        # Wait out invincibility -> 1 HP, vulnerable
+        for _ in range(62):
+            game.step(1, bme.Command.NONE)
+        s_1vul = np.asarray(game.getState(1), dtype=np.float32)
+        self.assertAlmostEqual(float(s_1vul[6, 2, 2]), 0.70, places=5)
+        self.assertAlmostEqual(float(s_1vul[7, 5, 8]), 0.50, places=5)
+
+    def test_sudden_death_exact_1750_tick_closure_on_15x13(self) -> None:
+        """Verify Sudden Death with onset=1200 drops 160 tiles and finishes at exact tick 2950 (1200 + 1750)."""
+        import bomberman_engine as bme
+
+        sd_game = bme.Game(15, 13)
+        sd_game.clearBoard()
+        sd_game.addPlayer(7, 6, 1, False)
+        sd_game.addPlayer(8, 6, 2, False)
+        sd_game.setSuddenDeathTimer(1200)
+
+        finished_tick = -1
+        for tick in range(1, 3500):
+            sd_game.step(1, bme.Command.NONE)
+            if tick < 1200:
+                self.assertFalse(sd_game.isSuddenDeathActive())
+            elif tick == 1200:
+                self.assertTrue(sd_game.isSuddenDeathActive())
+            elif not sd_game.isSuddenDeathActive():
+                finished_tick = tick
+                break
+
+        self.assertEqual(finished_tick, 2950, "Sudden Death on 15x13 with start=1200 must finish at exact tick 2950 (1200+1750)")
+        grid = sd_game.getBoardGrid()
+        closed_count = sum(1 for y in range(13) for x in range(15) if grid[y][x] == 1)
+        self.assertEqual(closed_count, 160, "Exactly 160 perimeter tiles must be closed across 4 rings")
 
 
 

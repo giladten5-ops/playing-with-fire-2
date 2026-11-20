@@ -135,9 +135,12 @@ class EpisodeMetricsCallback(BaseCallback):
 
             mean_rew = float(np.mean(self.reward_buffer)) if self.reward_buffer else 0.0
             win_pct = mean_key("won") * 100.0
+            loss_pct = mean_key("lost") * 100.0
+            draw_pct = mean_key("draw") * 100.0
             surv_pct = mean_key("survived") * 100.0
             kills = mean_key("kills")
             hits = mean_key("enemies_hit")
+            lives_lost = mean_key("lives_lost")
             walls = mean_key("walls_destroyed")
             bombs = mean_key("bombs_placed")
             tact_bombs = mean_key("tactical_bombs")
@@ -145,6 +148,12 @@ class EpisodeMetricsCallback(BaseCallback):
             dodges = mean_key("successful_dodges")
             shields = mean_key("shield_interventions")
             traps = mean_key("traps_created")
+            rew_term = mean_key("rew_term")
+            rew_combat = mean_key("rew_combat")
+            rew_prog = mean_key("rew_prog")
+            rew_pbrs = mean_key("rew_pbrs")
+            rew_time = mean_key("rew_time")
+            rew_stag = mean_key("rew_stagnation")
 
             bar_len = 16
             filled = int(progress * bar_len)
@@ -158,9 +167,12 @@ class EpisodeMetricsCallback(BaseCallback):
                 "episodes_in_window": len(self.ep_buffer),
                 "mean_reward": round(mean_rew, 2),
                 "win_rate": round(win_pct, 2),
+                "loss_rate": round(loss_pct, 2),
+                "draw_rate": round(draw_pct, 2),
                 "survival_rate": round(surv_pct, 2),
                 "avg_kills": round(kills, 3),
                 "avg_enemies_hit": round(hits, 3),
+                "avg_lives_lost": round(lives_lost, 3),
                 "avg_walls_destroyed": round(walls, 2),
                 "avg_bombs_placed": round(bombs, 2),
                 "avg_tactical_bombs": round(tact_bombs, 2),
@@ -168,6 +180,14 @@ class EpisodeMetricsCallback(BaseCallback):
                 "avg_dodges": round(dodges, 2),
                 "avg_shield_interventions": round(shields, 2),
                 "avg_traps_created": round(traps, 2),
+                "reward_breakdown": {
+                    "terminal": round(rew_term, 2),
+                    "combat": round(rew_combat, 2),
+                    "progression": round(rew_prog, 2),
+                    "pbrs": round(rew_pbrs, 2),
+                    "time": round(rew_time, 2),
+                    "stagnation": round(rew_stag, 2),
+                },
             }
             self.history.append(entry)
 
@@ -183,12 +203,11 @@ class EpisodeMetricsCallback(BaseCallback):
                     f"FPS: {fps:>4d} | "
                     f"Time: {elapsed_str} (ETA: {eta_str}) | "
                     f"Rew: {mean_rew:>6.1f} | "
-                    f"Win: {win_pct:4.1f}% | Surv: {surv_pct:4.1f}% | "
+                    f"W/L/D: {win_pct:4.1f}/{loss_pct:4.1f}/{draw_pct:4.1f}% | "
                     f"Kills: {kills:4.2f} | Hits: {hits:4.2f} | "
-                    f"Traps: {traps:4.2f} | "
                     f"Walls: {walls:4.1f} | Bombs: {bombs:4.1f} | "
-                    f"Push: {pushes:4.2f} | Dodges: {dodges:4.1f} | "
-                    f"Shld: {shields:4.1f}",
+                    f"Push: {pushes:4.2f} | "
+                    f"R[T:{rew_term:+.1f} C:{rew_combat:+.1f} P:{rew_prog:+.1f} B:{rew_pbrs:+.1f} S:{rew_stag:+.1f}]",
                     flush=True,
                 )
         return True
@@ -198,59 +217,33 @@ def make_train_env(
     rank: int,
     base_seed: int,
     total_envs: int = 4,
+    total_timesteps: int = 1500000,
     self_play_model_path: Optional[str] = None,
     use_bfs_channels: bool = False,
     mask_mode: str = "clean",
+    gamma: float = 0.995,
 ) -> Callable[[], Monitor]:
-    """Create a seeded worker environment with structured + League Self-Play curriculum diversity."""
+    """Create a seeded worker environment with synchronized 3-phase skill curriculum."""
     def _init() -> Monitor:
         th.set_num_threads(1)
         worker_seed = base_seed + rank * 1009
         seed_everything(worker_seed)
-        slot = rank % 4
         has_sp = bool(self_play_model_path and os.path.exists(self_play_model_path))
-        # Slot 0: 1v1 Duel (Self-Play AI if enabled, else DumbBot) (45% walls)
-        # Slot 1: 1v2 DumbBot tactical combat (55% walls)
-        # Slot 2: 1v3 Full standard DumbBot match (65% walls — prevents catastrophic forgetting)
-        # Slot 3: Randomized curriculum (varying DumbBot count, wall densities, powerups, Sudden Death, optional Self-Play)
-        if slot == 0:
-            env = BombermanEnv(
-                num_bots=1,
-                num_ai_opponents=1 if has_sp else 0,
-                self_play_model_path=self_play_model_path if has_sp else None,
-                wall_density=45,
-                use_bfs_channels=use_bfs_channels,
-                mask_mode=mask_mode,
-                randomize_curriculum=False,
-            )
-        elif slot == 1:
-            env = BombermanEnv(
-                num_bots=2,
-                num_ai_opponents=0,
-                wall_density=55,
-                use_bfs_channels=use_bfs_channels,
-                mask_mode=mask_mode,
-                randomize_curriculum=False,
-            )
-        elif slot == 2:
-            env = BombermanEnv(
-                num_bots=3,
-                num_ai_opponents=0,
-                wall_density=65,
-                use_bfs_channels=use_bfs_channels,
-                mask_mode=mask_mode,
-                randomize_curriculum=False,
-            )
-        else:
-            env = BombermanEnv(
-                num_bots=3,
-                num_ai_opponents=1 if has_sp else 0,
-                self_play_model_path=self_play_model_path if has_sp else None,
-                wall_density=60,
-                use_bfs_channels=use_bfs_channels,
-                mask_mode=mask_mode,
-                randomize_curriculum=True,
-            )
+        worker_target_steps = max(1, int(total_timesteps) // max(1, int(total_envs)))
+        env = BombermanEnv(
+            max_steps=1500,
+            max_match_ticks=3600,
+            num_bots=3,
+            num_ai_opponents=1 if has_sp else 0,
+            self_play_model_path=self_play_model_path if has_sp else None,
+            wall_density=65,
+            use_bfs_channels=use_bfs_channels,
+            mask_mode=mask_mode,
+            sudden_death_ticks=1200,
+            gamma=gamma,
+            curriculum_slot=rank,
+            worker_target_steps=worker_target_steps,
+        )
         env.reset(seed=worker_seed)
         return Monitor(env, info_keywords=("is_success", "win"))
     return _init
@@ -261,18 +254,23 @@ def make_eval_env(
     self_play_model_path: Optional[str] = None,
     use_bfs_channels: bool = False,
     mask_mode: str = "clean",
+    gamma: float = 0.995,
 ) -> Callable[[], Monitor]:
     """Create a lightweight in-process evaluation environment against DumbBots."""
     def _init() -> Monitor:
         eval_seed = base_seed + 50000
         seed_everything(eval_seed)
         env = BombermanEnv(
+            max_steps=1500,
+            max_match_ticks=3600,
             num_bots=2,
             num_ai_opponents=0,
             wall_density=55,
+            sudden_death_ticks=1200,
             use_bfs_channels=use_bfs_channels,
             mask_mode=mask_mode,
             randomize_curriculum=True,
+            gamma=gamma,
         )
         env.reset(seed=eval_seed)
         return Monitor(env, info_keywords=("is_success", "win"))
@@ -334,7 +332,8 @@ def main() -> None:
     use_bfs_channels = bool(args.legacy_bfs)
     mask_mode = "legacy" if args.legacy_bfs else "clean"
     timesteps = 150000 if (args.pilot and args.timesteps == 1500000) else args.timesteps
-    algo_tag = ("v10_legacy_bfs" if args.legacy_bfs else "v11_clean_cnn") if args.mask_actions else "v11_unmasked_cnn"
+    gamma = 0.995
+    algo_tag = ("v10_legacy_bfs" if args.legacy_bfs else "v12_clean_cnn") if args.mask_actions else "v12_unmasked_cnn"
     run_name = args.run_name or (f"{algo_tag}_pilot" if args.pilot else f"{algo_tag}_{timesteps // 1000}k")
     run_dir = os.path.join("models", run_name)
     ckpt_dir = os.path.join(run_dir, "checkpoints")
@@ -371,9 +370,11 @@ def main() -> None:
             i,
             args.seed,
             args.n_envs,
+            total_timesteps=timesteps,
             self_play_model_path=sp_model_path,
             use_bfs_channels=use_bfs_channels,
             mask_mode=mask_mode,
+            gamma=gamma,
         )
         for i in range(args.n_envs)
     ]
@@ -390,6 +391,7 @@ def main() -> None:
             self_play_model_path=sp_model_path,
             use_bfs_channels=use_bfs_channels,
             mask_mode=mask_mode,
+            gamma=gamma,
         )
     ])
 
@@ -426,7 +428,7 @@ def main() -> None:
                 batch_size=256,
                 n_epochs=4,
                 ent_coef=0.02,
-                gamma=0.99,
+                gamma=gamma,
                 gae_lambda=0.95,
                 clip_range=0.2,
                 max_grad_norm=0.5,
@@ -459,7 +461,7 @@ def main() -> None:
                 batch_size=256,
                 n_epochs=4,
                 ent_coef=0.02,
-                gamma=0.99,
+                gamma=gamma,
                 gae_lambda=0.95,
                 clip_range=0.2,
                 max_grad_norm=0.5,

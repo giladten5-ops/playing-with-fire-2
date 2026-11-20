@@ -265,10 +265,27 @@ void Game::fillState(int playerId, float* state) const {
         }
         else if (type == EntityType::PLAYER) {
             const Player* player = static_cast<const Player*>(entity.get());
+            int lives = std::clamp(player->getLives(), 1, 3);
+            bool inv = player->getInvincibilityTimer() > 0;
             if (player->getId() == playerId) {
-                setPixel(6, ex, ey, player->isOnCooldown() ? 0.5f : 1.0f);
+                float val;
+                if (inv) {
+                    val = (lives >= 2) ? 0.55f : 0.40f;
+                } else {
+                    val = (lives >= 3) ? 1.00f : ((lives == 2) ? 0.85f : 0.70f);
+                }
+                if (player->isOnCooldown()) {
+                    val -= 0.05f;
+                }
+                setPixel(6, ex, ey, val);
             } else {
-                setPixel(7, ex, ey, 1.0f);
+                float val;
+                if (inv) {
+                    val = (lives >= 2) ? 0.30f : 0.15f;
+                } else {
+                    val = (lives >= 3) ? 1.00f : ((lives == 2) ? 0.75f : 0.50f);
+                }
+                setPixel(7, ex, ey, val);
             }
         } else if (type == EntityType::BOMB) {
             activeBombs.push_back(static_cast<const Bomb*>(entity.get()));
@@ -388,7 +405,7 @@ std::vector<float> Game::getState(int playerId) const {
 StepResult Game::step(int playerId, Command action, const std::vector<PlayerCommand>& extraCommands) {
     StepResult result;
     result.isDone = false;
-    result.reward = -0.01f;
+    result.reward = -0.003f;
 
     const Player* player = m_world.getPlayer(playerId);
     bool wasAlive = player && player->isAlive();
@@ -440,7 +457,7 @@ StepResult Game::step(int playerId, Command action, const std::vector<PlayerComm
 
     int wallsDestroyedByPlayer = m_world.popWallsDestroyed(playerId);
     result.wallsDestroyed = wallsDestroyedByPlayer;
-    if (wallsDestroyedByPlayer > 0) result.reward += wallsDestroyedByPlayer * 3.0f;
+    if (wallsDestroyedByPlayer > 0) result.reward += wallsDestroyedByPlayer * 0.20f;
 
     player = m_world.getPlayer(playerId);
     bool isAliveNow = player && player->isAlive();
@@ -449,7 +466,7 @@ StepResult Game::step(int playerId, Command action, const std::vector<PlayerComm
         result.moved = (player->getX() != oldX || player->getY() != oldY);
         if (player->getLives() < livesBefore) {
             result.livesLost = (livesBefore - player->getLives());
-            result.reward -= result.livesLost * 25.0f;
+            result.reward -= result.livesLost * 6.0f;
         }
 
         int powerUpsGained = 0;
@@ -460,28 +477,28 @@ StepResult Game::step(int playerId, Command action, const std::vector<PlayerComm
         if (player->hasRing() && !ringBefore) powerUpsGained++;
 
         result.powerUpsCollected = powerUpsGained;
-        if (powerUpsGained > 0) result.reward += powerUpsGained * 8.0f;
+        if (powerUpsGained > 0) result.reward += powerUpsGained * 0.80f;
     } else if (wasAlive) {
         result.livesLost = livesBefore;
-        result.reward -= result.livesLost * 25.0f;
+        result.reward -= result.livesLost * 6.0f;
     }
 
     int enemiesHitByPlayer = m_world.popEnemiesHit(playerId);
     if (enemiesHitByPlayer > 0) {
         result.enemiesHit = enemiesHitByPlayer;
-        result.reward += result.enemiesHit * 10.0f;
+        result.reward += result.enemiesHit * 6.0f;
     }
 
     int enemiesKilledByPlayer = m_world.popEnemiesKilled(playerId);
     if (enemiesKilledByPlayer > 0) {
         result.enemiesKilled = enemiesKilledByPlayer;
-        result.reward += result.enemiesKilled * 20.0f;
+        result.reward += result.enemiesKilled * 12.0f;
     }
 
     result.isDone = isGameOver();
     if (wasAlive && !isAliveNow) {
         result.died = true;
-        result.reward -= 100.0f;
+        result.reward -= 72.0f;
         result.isDone = true;
     } else if (result.isDone && isAliveNow) {
         result.won = true;

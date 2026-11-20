@@ -35,7 +35,8 @@ py::tuple compute_bfs_features_cpp(
     bool has_hammer,
     int bomb_radius,
     int avail_bombs,
-    int speed_level
+    int speed_level,
+    int cur_cooldown = 0
 ) {
     auto buf = base_obs.request();
     const int channels = static_cast<int>(buf.shape[0]);
@@ -62,6 +63,8 @@ py::tuple compute_bfs_features_cpp(
         analysis["trapped_enemies_count"] = 0;
         analysis["in_danger"] = false;
         analysis["escape_action"] = 0;
+        analysis["safe_escape_moves"] = py::list();
+        analysis["safe_reachable_count"] = 0;
         analysis["hunt_action"] = 0;
         py::list vm;
         vm.append(0);
@@ -126,6 +129,19 @@ py::tuple compute_bfs_features_cpp(
 
     const int p_idx = py * w + px;
     const bool in_danger = ch_danger[p_idx] > 0.0f;
+    const int move_cd = std::max(4, 6 - std::clamp(speed_level, 0, 2));
+    const int init_wait = std::max(0, cur_cooldown - 1);
+    const int post_bomb_wait = std::max(0, cur_cooldown - 2);
+
+    // Reconstruct remaining time-to-explode (in C++ ticks) for every tile from Channel 3 (ch_danger)
+    std::vector<int> base_tte(hw, 9999);
+    for (int i = 0; i < hw; ++i) {
+        if (flames[i] || ch_danger[i] >= 0.995f) {
+            base_tte[i] = 0;
+        } else if (ch_danger[i] > 0.0f) {
+            base_tte[i] = std::max(1, static_cast<int>(std::lround((1.0f - ch_danger[i]) * 100.0f)));
+        }
+    }
 
     constexpr int ACT_IDS[4] = {1, 2, 3, 4};
     constexpr int DX[4] = {0, 0, -1, 1};
@@ -214,20 +230,26 @@ py::tuple compute_bfs_features_cpp(
             if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
                 int n_idx = ny * w + nx;
                 if (dist[n_idx] == -1 && passable[n_idx]) {
-                    float ndanger = ch_danger[n_idx];
-                    if (!in_danger && ndanger > 0.0f) continue;
-                    if (in_danger && ndanger >= 0.88f) continue;
+                    int next_d = d + 1;
+                    int tile_tte = base_tte[n_idx];
+                    if (!in_danger && tile_tte < 9999) continue;
+                    // When escaping danger, allow stepping onto a permanently safe tile (9999)
+                    // or an intermediate danger tile that survives until we leave it on tick init_wait + next_d * move_cd + 1.
+                    if (in_danger) {
+                        if (d == 0 && base_tte[p_idx] <= init_wait) continue;
+                        if (tile_tte < 9999 && tile_tte <= init_wait + next_d * move_cd) continue;
+                    }
 
-                    dist[n_idx] = d + 1;
+                    dist[n_idx] = next_d;
                     int fa = (d == 0) ? act_id : first_action[c_idx];
                     first_action[n_idx] = fa;
                     if (d == 0) {
                         valid_moves.push_back(act_id);
                     }
-                    if (ndanger == 0.0f) {
-                        reach_map[n_idx] = std::max(0.1f, 1.0f - static_cast<float>(d + 1) / 26.0f);
-                        if (d + 1 < min_safe_dist) {
-                            min_safe_dist = d + 1;
+                    if (tile_tte == 9999) {
+                        reach_map[n_idx] = std::max(0.1f, 1.0f - static_cast<float>(next_d) / 26.0f);
+                        if (next_d < min_safe_dist) {
+                            min_safe_dist = next_d;
                             escape_action = fa;
                         }
                     } else {
@@ -241,10 +263,91 @@ py::tuple compute_bfs_features_cpp(
         }
     }
 
+    std::vector<int> blast_stamp(hw, 0);
+    std::vector<int> sim_tte_stamp(hw, 0);
+    std::vector<int> sim_tte_val(hw, 9999);
+    std::vector<int> bfs_stamp(hw, 0);
+    std::vector<int> bfs_dist(hw, 0);
+    std::vector<int> bqx(hw);
+    std::vector<int> bqy(hw);
+    int cur_blast_id = 0;
+    int cur_sim_id = 0;
+    int cur_bfs_id = 0;
+
+    // Independent per-direction fuse-accurate escape verification when in_danger:
+    // finds ALL initial directions a in {1..4} that can reach a permanently safe tile (base_tte == 9999)
+    // before any traversed tile explodes under the player's actual move_cd and init_wait.
+    std::vector<int> safe_escape_moves;
+    if (in_danger && base_tte[p_idx] > init_wait) {
+        int best_escape_dist = 999;
+        for (int dir = 0; dir < 4; ++dir) {
+            int act_id = ACT_IDS[dir];
+            int sx = px + DX[dir];
+            int sy = py + DY[dir];
+            if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue;
+            int s_idx = sy * w + sx;
+            if (!passable[s_idx]) continue;
+            if (base_tte[s_idx] == 9999) {
+                safe_escape_moves.push_back(act_id);
+                if (1 < best_escape_dist) {
+                    best_escape_dist = 1;
+                    escape_action = act_id;
+                }
+                continue;
+            }
+            if (base_tte[s_idx] <= init_wait + move_cd) continue;
+
+            int sid = ++cur_bfs_id;
+            int head = 0, tail = 0;
+            bfs_stamp[p_idx] = sid;
+            bfs_stamp[s_idx] = sid;
+            bfs_dist[s_idx] = 1;
+            bqx[tail] = sx;
+            bqy[tail] = sy;
+            tail++;
+
+            int found_dist = -1;
+            while (head < tail && found_dist < 0) {
+                int cx = bqx[head];
+                int cy = bqy[head];
+                head++;
+                int cd = bfs_dist[cy * w + cx];
+                if (cd >= 16) continue;
+                for (int nd = 0; nd < 4; ++nd) {
+                    int nx = cx + DX[nd];
+                    int ny = cy + DY[nd];
+                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                    int n_idx = ny * w + nx;
+                    if (bfs_stamp[n_idx] == sid || !passable[n_idx]) continue;
+                    int next_d = cd + 1;
+                    int n_tte = base_tte[n_idx];
+                    if (n_tte == 9999) {
+                        found_dist = next_d;
+                        break;
+                    }
+                    if (n_tte > init_wait + next_d * move_cd) {
+                        bfs_stamp[n_idx] = sid;
+                        bfs_dist[n_idx] = next_d;
+                        bqx[tail] = nx;
+                        bqy[tail] = ny;
+                        tail++;
+                    }
+                }
+            }
+            if (found_dist > 0) {
+                safe_escape_moves.push_back(act_id);
+                if (found_dist < best_escape_dist) {
+                    best_escape_dist = found_dist;
+                    escape_action = act_id;
+                }
+            }
+        }
+    }
+
     std::vector<int> push_actions;
     std::vector<int> tactical_push_actions;
     if (has_hammer && !bombs[p_idx]) {
-        bool trapped_without_walk_escape = (in_danger && escape_action == 0);
+        bool trapped_without_walk_escape = (in_danger && safe_escape_moves.empty() && escape_action == 0);
         for (int dir = 0; dir < 4; ++dir) {
             int act_id = ACT_IDS[dir];
             int dx = DX[dir], dy = DY[dir];
@@ -257,21 +360,18 @@ py::tuple compute_bfs_features_cpp(
                     tactical_push_actions.push_back(act_id);
                     bomb_map[(py + dy) * w + (px + dx)] = 1.0f;
                 }
-                if (trapped_without_walk_escape && escape_action == 0) {
-                    escape_action = act_id;
+                if (trapped_without_walk_escape) {
+                    if (std::find(safe_escape_moves.begin(), safe_escape_moves.end(), act_id) == safe_escape_moves.end()) {
+                        safe_escape_moves.push_back(act_id);
+                    }
+                    if (escape_action == 0) {
+                        escape_action = act_id;
+                    }
                 }
             }
         }
     }
     const bool can_push_bomb_now = !push_actions.empty();
-
-    std::vector<int> blast_stamp(hw, 0);
-    std::vector<int> bfs_stamp(hw, 0);
-    std::vector<int> bfs_dist(hw, 0);
-    std::vector<int> bqx(hw);
-    std::vector<int> bqy(hw);
-    int cur_blast_id = 0;
-    int cur_bfs_id = 0;
 
     auto mark_blast_zone = [&](int bx, int by, int radius) -> int {
         int bid = ++cur_blast_id;
@@ -291,12 +391,65 @@ py::tuple compute_bfs_features_cpp(
         return bid;
     };
 
+    // Complete fuse-aware & chain-aware hypothetical bomb escape check:
+    // Fuses the hypothetical bomb's blast zone and chained explosion time T_hyp into sim_tte
+    // across EVERY tile along the escape path (not just the destination), and validates each
+    // intermediate tile's entry/exit timing against move_cd and post_bomb_wait.
     auto has_escape_if_bomb_at = [&](int bx, int by, int radius) -> bool {
-        int bid = mark_blast_zone(bx, by, radius);
-        int max_search_steps = std::max(6, radius + 3);
+        int start_idx = by * w + bx;
+        int t_hyp = std::min(90, base_tte[start_idx]);
+        // Player places bomb on Tick 1, then leaves (bx, by) on Tick 2 + post_bomb_wait.
+        // Thus (bx, by) must survive through Tick 1 + post_bomb_wait.
+        if (t_hyp <= 1 + post_bomb_wait) {
+            return false;
+        }
+
+        int sim_id = ++cur_sim_id;
+        auto get_sim_tte = [&](int idx) -> int {
+            return (sim_tte_stamp[idx] == sim_id) ? sim_tte_val[idx] : base_tte[idx];
+        };
+        auto set_min_sim_tte = [&](int idx, int val) {
+            int cur_v = get_sim_tte(idx);
+            if (val < cur_v) {
+                sim_tte_stamp[idx] = sim_id;
+                sim_tte_val[idx] = val;
+            }
+        };
+
+        // Propagate hypothetical bomb blast zone AND any secondary bombs it chain-detonates earlier
+        struct ChainNode { int x; int y; int rad; int tte; };
+        ChainNode chain_q[32];
+        int cq_head = 0, cq_tail = 0;
+        chain_q[cq_tail++] = {bx, by, radius, t_hyp};
+        set_min_sim_tte(start_idx, t_hyp);
+
+        while (cq_head < cq_tail) {
+            ChainNode cn = chain_q[cq_head++];
+            for (int dir = 0; dir < 4; ++dir) {
+                int dx = DX[dir], dy = DY[dir];
+                for (int r = 1; r <= cn.rad; ++r) {
+                    int nx = cn.x + dx * r;
+                    int ny = cn.y + dy * r;
+                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) break;
+                    int n_idx = ny * w + nx;
+                    if (solid[n_idx]) break;
+                    int prev_tte = get_sim_tte(n_idx);
+                    set_min_sim_tte(n_idx, cn.tte);
+                    if (bombs[n_idx]) {
+                        if (cn.tte < prev_tte && cq_tail < 32) {
+                            chain_q[cq_tail++] = {nx, ny, std::max(radius, 4), cn.tte};
+                        }
+                        break;
+                    }
+                    if (breakable[n_idx]) break;
+                }
+            }
+        }
+
+        // BFS escape path from (bx, by) checking EVERY traversed tile against sim_tte
+        int max_search_steps = std::min(16, std::max(6, radius + 4));
         int sid = ++cur_bfs_id;
         int head = 0, tail = 0;
-        int start_idx = by * w + bx;
         bfs_stamp[start_idx] = sid;
         bfs_dist[start_idx] = 0;
         bqx[tail] = bx;
@@ -313,18 +466,24 @@ py::tuple compute_bfs_features_cpp(
             for (int dir = 0; dir < 4; ++dir) {
                 int nx = cx + DX[dir];
                 int ny = cy + DY[dir];
-                if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-                    int n_idx = ny * w + nx;
-                    if (bfs_stamp[n_idx] != sid && passable[n_idx] && ch_danger[n_idx] < 0.7f) {
-                        bfs_stamp[n_idx] = sid;
-                        bfs_dist[n_idx] = cd + 1;
-                        if (blast_stamp[n_idx] != bid && ch_danger[n_idx] == 0.0f) {
-                            return true;
-                        }
-                        bqx[tail] = nx;
-                        bqy[tail] = ny;
-                        tail++;
-                    }
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                int n_idx = ny * w + nx;
+                if (bfs_stamp[n_idx] == sid || !passable[n_idx]) continue;
+
+                int next_d = cd + 1;
+                int tile_tte = get_sim_tte(n_idx);
+                if (tile_tte == 9999) {
+                    return true;
+                }
+                // After placing a bomb on Tick 1, step next_d arrives on Tick 2 + post_bomb_wait + (next_d - 1) * move_cd
+                // and leaves on Tick 2 + post_bomb_wait + next_d * move_cd.
+                // Thus intermediate tile n_idx must remain unexploded through Tick 1 + post_bomb_wait + next_d * move_cd.
+                if (tile_tte > 1 + post_bomb_wait + next_d * move_cd) {
+                    bfs_stamp[n_idx] = sid;
+                    bfs_dist[n_idx] = next_d;
+                    bqx[tail] = nx;
+                    bqy[tail] = ny;
+                    tail++;
                 }
             }
         }
@@ -442,9 +601,7 @@ py::tuple compute_bfs_features_cpp(
                     out_et += 1;
                 }
                 if (breakable[n_idx]) {
-                    if (r == 1) {
-                        out_t += 1;
-                    }
+                    out_t += 1;
                     break;
                 }
             }
@@ -602,30 +759,15 @@ py::tuple compute_bfs_features_cpp(
         }
     }
 
-    float phi_space = std::min(safe_reachable_count, 35) * 0.12f;
-    float phi_safety = in_danger ? (-4.0f * ch_danger[p_idx]) : 0.0f;
-    float phi_hunt = 0.0f;
-    if (!in_danger) {
-        if (closest_pu_x >= 0) {
-            phi_hunt += (15.0f - std::min(closest_pu_d, 15)) * 0.16f;
+    // Standard PBRS State Potential Phi(s) in [-1.20, 0.0]:
+    // Strictly based on Manhattan distance to nearest alive enemy (0.0 if none alive).
+    float phi = 0.0f;
+    if (!en_all.empty()) {
+        int min_en_manhattan = 999;
+        for (const auto& ec : en_all) {
+            min_en_manhattan = std::min(min_en_manhattan, std::abs(ec.first - px) + std::abs(ec.second - py));
         }
-        if (!enemy_bombing_sites.empty()) {
-            int min_ebs_d = enemy_bombing_sites[0].dist;
-            phi_hunt += (16.0f - std::min(min_ebs_d, 16)) * 0.35f;
-        } else if (!bombing_sites.empty()) {
-            int min_bs_d = bombing_sites[0].dist;
-            phi_hunt += (15.0f - std::min(min_bs_d, 15)) * 0.16f;
-        }
-        if (!en_all.empty()) {
-            int min_en_manhattan = 999;
-            for (const auto& ec : en_all) {
-                min_en_manhattan = std::min(min_en_manhattan, std::abs(ec.first - px) + std::abs(ec.second - py));
-            }
-            phi_hunt += (26.0f - std::min(min_en_manhattan, 26)) * 0.18f;
-            if (!reach_en.empty()) {
-                phi_hunt += (22.0f - std::min(std::get<0>(reach_en[0]), 22)) * 0.30f;
-            }
-        }
+        phi = -0.05f * static_cast<float>(std::min(min_en_manhattan, 24));
     }
 
     py::dict analysis;
@@ -639,6 +781,8 @@ py::tuple compute_bfs_features_cpp(
     analysis["trapped_enemies_count"] = trapped_enemies_count;
     analysis["in_danger"] = in_danger;
     analysis["escape_action"] = escape_action;
+    analysis["safe_escape_moves"] = py::cast(safe_escape_moves);
+    analysis["safe_reachable_count"] = safe_reachable_count;
     analysis["hunt_action"] = hunt_action;
     analysis["valid_moves"] = py::cast(valid_moves);
     analysis["can_place_bomb"] = can_place_bomb;
@@ -656,7 +800,7 @@ py::tuple compute_bfs_features_cpp(
         analysis["closest_bombing_site"] = py::none();
     }
 
-    return py::make_tuple(reach_arr, bomb_arr, phi_space + phi_safety + phi_hunt, analysis);
+    return py::make_tuple(reach_arr, bomb_arr, phi, analysis);
 }
 
 } // namespace
@@ -690,6 +834,7 @@ PYBIND11_MODULE(bomberman_engine, m) {
           py::arg("bomb_radius"),
           py::arg("avail_bombs"),
           py::arg("speed_level") = 0,
+          py::arg("cur_cooldown") = 0,
           "Computes tactical BFS reachability map, bomb target map, PBRS potential, and analysis dict in C++17");
 
     py::enum_<Command>(m, "Command")

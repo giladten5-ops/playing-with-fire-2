@@ -286,6 +286,11 @@ class PPOAgentController:
         self._recent_positions: deque[Tuple[int, int]] = deque(maxlen=8)
         self.model = shared_model
         self.expected_channels = expected_channels
+        if self.model is not None:
+            obs_shape = getattr(self.model, "observation_space", None)
+            obs_shape = getattr(obs_shape, "shape", None) if obs_shape is not None else None
+            if obs_shape and len(obs_shape) == 3:
+                self.expected_channels = int(obs_shape[0])
         self.model_path = model_path
         self._last_debug: Optional[AIDebugSnapshot] = None
         self._last_debug_tick: Optional[int] = None

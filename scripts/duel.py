@@ -51,8 +51,8 @@ from gui.controllers import PPOAgentController
 from gui.engine_adapter import CppGameSession
 
 
-DEFAULT_V8_PATH = "models/v10_15x13_selfplay/best/best_model.zip"
-DEFAULT_V7_PATH = "models/v9_15x13_bots_1500k/best/best_model.zip"
+DEFAULT_V8_PATH = "models/v11_clean_cnn_1500k/best/best_model.zip"
+DEFAULT_V7_PATH = "models/v10_15x13_selfplay/best/best_model.zip"
 
 
 def load_model(path: str):
